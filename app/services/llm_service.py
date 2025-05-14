@@ -120,6 +120,7 @@ Wind Speed: Min {weather_data['summary']['wind_speed']['min']:.2f} mph, Max {wea
                 
                 prompt += f"\n{param.capitalize()}: {direction}, Change: {change:.2f}, Rate: {rate:.2f}/hour"
         
+        prompt += "\n\nPlease explain your reasoning using standard parlance, make the weather report easy for humans to understand and apply."
         prompt += "\n\nPlease format your response as JSON with keys: prediction_12h, prediction_24h, reasoning, confidence"
         
         # Log the API request (without the key)
