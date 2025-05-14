@@ -112,7 +112,7 @@ Wind Speed: Min {weather_data['summary']['wind_speed']['min']:.2f} mph, Max {wea
         
         # Add trend data if available
         if weather_data.get('recent_trends'):
-            prompt += "\nRecent trends (over last 6 hours):"
+            prompt += "\nRecent trends (over last 12 hours):"
             for param, trend_data in weather_data['recent_trends'].items():
                 direction = trend_data.get('direction', 'stable')
                 change = trend_data.get('change', 0)
@@ -163,7 +163,7 @@ Wind Speed: Min {weather_data['summary']['wind_speed']['min']:.2f} mph, Max {wea
         return None
 
 @with_db_connection
-def generate_weather_prediction(db=None, date=None, force=False):
+def generate_weather_prediction(db=None, date=None, force=False, hours_to_analyze=12):
     """
     Generate weather predictions using LLM based on recent hourly measurements
     
@@ -171,6 +171,7 @@ def generate_weather_prediction(db=None, date=None, force=False):
         db: Database connection
         date: Specific date to generate prediction for (format: YYYY-MM-DD)
         force: Whether to force regeneration of prediction even if a recent one exists
+        hours_to_analyze: Number of hours of data to analyze (default: 12)
         
     Returns:
         The prediction document or None if failed
@@ -190,9 +191,9 @@ def generate_weather_prediction(db=None, date=None, force=False):
                 return recent_prediction
         
         # Step 2: Get hourly measurements
-        hourly_data = get_hourly_measurements(hours=6)
+        hourly_data = get_hourly_measurements(hours=hours_to_analyze)
         if not hourly_data or len(hourly_data) == 0:
-            logger.error("No hourly measurements found for the last 6 hours")
+            logger.error(f"No hourly measurements found for the last {hours_to_analyze} hours")
             return None
             
         logger.info(f"Retrieved {len(hourly_data)} hours of weather data")
@@ -248,12 +249,13 @@ def generate_weather_prediction(db=None, date=None, force=False):
         return None
 
 @with_db_connection
-def check_recent_prediction(db=None):
+def check_recent_prediction(db=None, hours=12):
     """
-    Check if we have a prediction from the last 6 hours
+    Check if we have a prediction from the last N hours
     
     Args:
         db: Database connection (optional)
+        hours: Number of hours to look back (default: 12)
         
     Returns:
         The most recent prediction document or None if not found
@@ -262,10 +264,10 @@ def check_recent_prediction(db=None):
         if db is None:
             db = get_database()
             
-        six_hours_ago = (datetime.now() - timedelta(hours=6)).strftime('%Y-%m-%d %H:%M:%S')
+        hours_ago = (datetime.now() - timedelta(hours=hours)).strftime('%Y-%m-%d %H:%M:%S')
         
         recent_prediction = db['weather_predictions'].find_one(
-            {'created_at': {'$gte': six_hours_ago}},
+            {'created_at': {'$gte': hours_ago}},
             sort=[('created_at', -1)]
         )
         
