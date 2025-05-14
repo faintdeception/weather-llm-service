@@ -29,9 +29,9 @@ jobs:
           # Add any environment variables your service needs
           MONGO_URI: ${{ secrets.MONGO_URI }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          LLM_API_URL: ${{ env.LLM_API_URL }}
-          LLM_MODEL: ${{ env.LLM_MODEL }}
-          MONGO_DB: ${{ env.MONGO_DB }}
+          LLM_API_URL: ${{ secrets.LLM_API_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          MONGO_DB: ${{ secrets.MONGO_DB }}
           # Add other environment variables as needed
         run: |
           python -m app.services.scheduled_task  # Adjust this to the actual script that needs to run
