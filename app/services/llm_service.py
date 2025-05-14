@@ -232,11 +232,24 @@ def generate_weather_prediction(db=None, date=None, force=False, hours_to_analyz
             "date": current_date,
             "location": location,
             "created_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+        
+        # Handle case where prediction_result might be a list instead of a dictionary
+        if isinstance(prediction_result, list):
+            logger.warning("Prediction result returned as a list, attempting to use first item")
+            if prediction_result and isinstance(prediction_result[0], dict):
+                prediction_result = prediction_result[0]
+            else:
+                logger.error("Cannot extract valid prediction from list result")
+                return None
+        
+        # Now safely extract values from prediction_result dictionary
+        prediction_doc.update({
             "prediction_12h": prediction_result.get('prediction_12h', {}),
             "prediction_24h": prediction_result.get('prediction_24h', {}),
             "reasoning": prediction_result.get('reasoning', ""),
             "confidence": prediction_result.get('confidence', 0.0)
-        }
+        })
         
         # Insert the prediction
         db['weather_predictions'].insert_one(prediction_doc)
