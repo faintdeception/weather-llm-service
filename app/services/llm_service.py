@@ -10,7 +10,7 @@ import sys
 import json
 import logging
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import requests
 from pymongo import MongoClient
 from app.database.connection import get_database, with_db_connection
@@ -32,14 +32,13 @@ def get_daily_report(date=None):
         date: Date string in YYYY-MM-DD format, defaults to yesterday
         
     Returns:
-        The daily report document or None if not found
-    """
+        The daily report document or None if not found    """
     try:
         db = get_database()
         
         if date is None:
             # Default to yesterday
-            yesterday = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')
+            yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime('%Y-%m-%d')
             date = yesterday
             
         report = db['daily_reports'].find_one({'date': date})
@@ -179,10 +178,8 @@ def generate_weather_prediction(db=None, date=None, force=False, hours_to_analyz
     """
     try:
         if db is None:
-            db = get_database()
-        
-        # Use provided date or default to current date
-        current_date = date if date else datetime.now().strftime('%Y-%m-%d')
+            db = get_database()        # Use provided date or default to current date
+        current_date = date if date else datetime.now(timezone.utc).strftime('%Y-%m-%d')
         
         # Step 1: Check if we need a new prediction
         if not force:
@@ -226,12 +223,11 @@ def generate_weather_prediction(db=None, date=None, force=False, hours_to_analyz
         prediction_result = call_prediction_api(prompt_data)
         if not prediction_result:
             logger.error("Failed to get prediction from LLM API")
-            return None
-          # Step 7: Store the prediction
+            return None        # Step 7: Store the prediction
         prediction_doc = {
             "date": current_date,
             "location": location,
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc),
         }
         
         # Handle case where prediction_result might be a list instead of a dictionary
@@ -250,10 +246,18 @@ def generate_weather_prediction(db=None, date=None, force=False, hours_to_analyz
             "reasoning": prediction_result.get('reasoning', ""),
             "confidence": prediction_result.get('confidence', 0.0)
         })
+          # Debug: Log the type of created_at before insertion
+        logger.info(f"About to insert prediction with created_at type: {type(prediction_doc['created_at'])}, value: {prediction_doc['created_at']}")
+        logger.info(f"Prediction doc before insertion: {prediction_doc}")
         
         # Insert the prediction
-        db['weather_predictions'].insert_one(prediction_doc)
-        logger.info(f"Stored new weather prediction for {current_date}")
+        result = db['weather_predictions'].insert_one(prediction_doc)
+        logger.info(f"Stored new weather prediction for {current_date} with ID: {result.inserted_id}")
+        
+        # Debug: Retrieve the document back to check how it's stored
+        stored_doc = db['weather_predictions'].find_one({"_id": result.inserted_id})
+        logger.info(f"Retrieved prediction created_at type: {type(stored_doc['created_at'])}, value: {stored_doc['created_at']}")
+        logger.info(f"Full stored document: {stored_doc}")
             
         return prediction_doc
     except Exception as e:
@@ -277,7 +281,7 @@ def check_recent_prediction(db=None, hours=12):
         if db is None:
             db = get_database()
             
-        hours_ago = datetime.utcnow() - timedelta(hours=hours)
+        hours_ago = datetime.now(timezone.utc) - timedelta(hours=hours)
         
         recent_prediction = db['weather_predictions'].find_one(
             {'created_at': {'$gte': hours_ago}},
@@ -307,7 +311,7 @@ def get_hourly_measurements(hours=6, location=None, db=None):
         if db is None:
             db = get_database()
             
-        hours_ago = datetime.utcnow() - timedelta(hours=hours)
+        hours_ago = datetime.now(timezone.utc) - timedelta(hours=hours)
         
         query = {'timestamp_ms': {'$gte': hours_ago}}
         if location:

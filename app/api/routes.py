@@ -3,7 +3,7 @@ API routes for the Weather LLM microservice
 """
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from pymongo import MongoClient
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
 from ..models.prediction import (
@@ -68,7 +68,7 @@ async def request_prediction(
 async def get_latest_prediction(db = Depends(get_db)):
     """Get the latest weather prediction"""
     try:        # Get yesterday's date by default
-        yesterday = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime('%Y-%m-%d')
         
         # Find the latest prediction
         prediction = db['weather_predictions'].find_one(
@@ -137,10 +137,9 @@ async def get_schedule_info(db = Depends(get_db)):
         latest_prediction = db['weather_predictions'].find_one(
             sort=[('created_at', -1)]
         )
-        
-        # Calculate next prediction time (predictions run daily at 6 AM)
-        now = datetime.utcnow()
-        next_run_datetime = datetime(now.year, now.month, now.day, 6, 0, 0)
+          # Calculate next prediction time (predictions run daily at 6 AM)
+        now = datetime.now(timezone.utc)
+        next_run_datetime = datetime(now.year, now.month, now.day, 6, 0, 0, tzinfo=timezone.utc)
         
         if now.hour >= 6:
             # If it's already past 6 AM, next run is tomorrow

@@ -8,7 +8,7 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Configure logging
 logging.basicConfig(
@@ -63,9 +63,8 @@ def configure_scheduler():
     try:
         # Schedule daily prediction generation at 6 AM
         def run_daily_prediction():
-            try:
-                # Get yesterday's date (predictions are for the previous day)
-                yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+            try:                # Get yesterday's date (predictions are for the previous day)
+                yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime('%Y-%m-%d')
                 logger.info(f"Running scheduled prediction for {yesterday}")
                 
                 # Generate the prediction

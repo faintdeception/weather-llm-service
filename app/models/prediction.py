@@ -22,8 +22,11 @@ class PredictionResult(BaseModel):
     confidence: float
     
     class Config:
+        # Don't convert datetime to string when creating the model
+        arbitrary_types_allowed = True
         json_encoders = {
-            datetime: lambda v: v.isoformat()
+            # Only convert to ISO format when serializing to JSON for API responses
+            datetime: lambda v: v.isoformat() + 'Z'  # Add Z to indicate UTC
         }
 
 class PredictionResponse(BaseModel):

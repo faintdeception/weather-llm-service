@@ -23,8 +23,8 @@ def main():
     logger.info("Starting scheduled weather prediction task")
     
     try:        # Get the current hour to include in the log for clarity on which run this is (6am or 6pm)
-        from datetime import datetime
-        current_hour = datetime.utcnow().hour
+        from datetime import datetime, timezone
+        current_hour = datetime.now(timezone.utc).hour
         am_pm = "AM" if current_hour < 12 else "PM"
         logger.info(f"Running scheduled job at {current_hour}:00 {am_pm} UTC")
         
