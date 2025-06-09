@@ -22,12 +22,11 @@ def main():
     """Main function to run the scheduled task"""
     logger.info("Starting scheduled weather prediction task")
     
-    try:
-        # Get the current hour to include in the log for clarity on which run this is (6am or 6pm)
+    try:        # Get the current hour to include in the log for clarity on which run this is (6am or 6pm)
         from datetime import datetime
-        current_hour = datetime.now().hour
+        current_hour = datetime.utcnow().hour
         am_pm = "AM" if current_hour < 12 else "PM"
-        logger.info(f"Running scheduled job at {current_hour}:00 {am_pm}")
+        logger.info(f"Running scheduled job at {current_hour}:00 {am_pm} UTC")
         
         # Override the default 6 hours of data with 12 hours instead
         hours_to_analyze = 12

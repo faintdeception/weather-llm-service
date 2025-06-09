@@ -39,7 +39,7 @@ def get_daily_report(date=None):
         
         if date is None:
             # Default to yesterday
-            yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+            yesterday = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')
             date = yesterday
             
         report = db['daily_reports'].find_one({'date': date})
@@ -227,12 +227,11 @@ def generate_weather_prediction(db=None, date=None, force=False, hours_to_analyz
         if not prediction_result:
             logger.error("Failed to get prediction from LLM API")
             return None
-        
-        # Step 7: Store the prediction
+          # Step 7: Store the prediction
         prediction_doc = {
             "date": current_date,
             "location": location,
-            "created_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "created_at": datetime.utcnow(),
         }
         
         # Handle case where prediction_result might be a list instead of a dictionary
@@ -278,7 +277,7 @@ def check_recent_prediction(db=None, hours=12):
         if db is None:
             db = get_database()
             
-        hours_ago = (datetime.now() - timedelta(hours=hours)).strftime('%Y-%m-%d %H:%M:%S')
+        hours_ago = datetime.utcnow() - timedelta(hours=hours)
         
         recent_prediction = db['weather_predictions'].find_one(
             {'created_at': {'$gte': hours_ago}},
@@ -308,7 +307,7 @@ def get_hourly_measurements(hours=6, location=None, db=None):
         if db is None:
             db = get_database()
             
-        hours_ago = datetime.now() - timedelta(hours=hours)
+        hours_ago = datetime.utcnow() - timedelta(hours=hours)
         
         query = {'timestamp_ms': {'$gte': hours_ago}}
         if location:

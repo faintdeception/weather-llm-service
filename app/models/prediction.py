@@ -15,11 +15,16 @@ class PredictionResult(BaseModel):
     """Model for weather prediction results"""
     date: str
     location: str
-    created_at: str
+    created_at: datetime
     prediction_12h: Dict[str, Any]
     prediction_24h: Dict[str, Any]
     reasoning: str
     confidence: float
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
 
 class PredictionResponse(BaseModel):
     """Response model for prediction API endpoints"""
@@ -32,3 +37,8 @@ class ScheduleInfo(BaseModel):
     next_prediction: str
     schedule_frequency: str
     last_prediction: Optional[str] = None
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }

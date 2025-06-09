@@ -67,9 +67,8 @@ async def request_prediction(
 @router.get("/latest", response_model=PredictionResponse)
 async def get_latest_prediction(db = Depends(get_db)):
     """Get the latest weather prediction"""
-    try:
-        # Get yesterday's date by default
-        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+    try:        # Get yesterday's date by default
+        yesterday = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')
         
         # Find the latest prediction
         prediction = db['weather_predictions'].find_one(
@@ -140,7 +139,7 @@ async def get_schedule_info(db = Depends(get_db)):
         )
         
         # Calculate next prediction time (predictions run daily at 6 AM)
-        now = datetime.now()
+        now = datetime.utcnow()
         next_run_datetime = datetime(now.year, now.month, now.day, 6, 0, 0)
         
         if now.hour >= 6:
@@ -150,7 +149,7 @@ async def get_schedule_info(db = Depends(get_db)):
         schedule_info = ScheduleInfo(
             next_prediction=next_run_datetime.strftime("%Y-%m-%d %H:%M:%S"),
             schedule_frequency="Daily at 6:00 AM",
-            last_prediction=latest_prediction.get('created_at') if latest_prediction else None
+            last_prediction=latest_prediction.get('created_at').strftime("%Y-%m-%d %H:%M:%S") if latest_prediction and latest_prediction.get('created_at') else None
         )
         
         return schedule_info
