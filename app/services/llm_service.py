@@ -99,7 +99,7 @@ def call_prediction_api(weather_data):
         prompt = f"""
 Based on the following weather data from {weather_data['location']} on {weather_data['date']}, please provide a weather analysis in the exact JSON format specified below.
 
-Instead of making future predictions, provide a summary analysis of the observed weather patterns and trends, but format the data as if it were predictions to maintain compatibility with downstream systems.
+Provide a light hearted analysis of the weather data in the style of a robot weather reporter. The report should be informative and based on the data, but digestable for humans to read.
 
 Current weather summary:
 Temperature: Min {weather_data['summary']['temperature']['min']:.2f}°C, Max {weather_data['summary']['temperature']['max']:.2f}°C, Avg {weather_data['summary']['temperature']['avg']:.2f}°C
