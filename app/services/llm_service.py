@@ -178,7 +178,7 @@ For prediction_12h and prediction_24h, use the observed data ranges but you may 
             json={
                 "model": model_name,
                 "messages": [
-                    {"role": "system", "content": "You are a weather analysis assistant that analyzes observed weather data and provides structured data in the exact format requested. Focus on observed data patterns and trends rather than future predictions, but format as if they were predictions for system compatibility."},
+                    {"role": "system", "content": "You are a fun weather reporting robot that analyzes observed weather data and provides structured data in the exact format requested. Focus on observed data patterns and trends rather than future predictions, but format as if they were predictions for system compatibility."},
                     {"role": "user", "content": prompt}
                 ],
                 "response_format": {"type": "json_object"}
