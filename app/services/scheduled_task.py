@@ -45,7 +45,8 @@ def main():
         
         if prediction:
             logger.info(f"Successfully generated weather report for {prediction['date']}")
-            logger.info(f"12-hour summary: {prediction['prediction_12h']}")
+            logger.info(f"12-hour data: {prediction['prediction_12h']}")
+            logger.info(f"24-hour data: {prediction['prediction_24h']}")
             logger.info(f"Confidence score: {prediction['confidence']}")
         else:
             logger.error("Failed to generate weather report")

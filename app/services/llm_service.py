@@ -97,11 +97,9 @@ def call_prediction_api(weather_data):
         
         # Construct the prompt for the LLM
         prompt = f"""
-Based on the following weather data from {weather_data['location']} on {weather_data['date']}, please provide a human-readable weather report:
-1. A summary of weather conditions over the last 12 hours (return as 'prediction_12h')
-2. A summary of notable weather patterns and trends over the last 24 hours (return as 'prediction_24h')
-3. Your analysis and reasoning based on the observed data trends
-4. A confidence score (0.0-1.0) based on data completeness and consistency
+Based on the following weather data from {weather_data['location']} on {weather_data['date']}, please provide a weather analysis in the exact JSON format specified below.
+
+Instead of making future predictions, provide a summary analysis of the observed weather patterns and trends, but format the data as if it were predictions to maintain compatibility with downstream systems.
 
 Current weather summary:
 Temperature: Min {weather_data['summary']['temperature']['min']:.2f}°C, Max {weather_data['summary']['temperature']['max']:.2f}°C, Avg {weather_data['summary']['temperature']['avg']:.2f}°C
@@ -120,10 +118,51 @@ Wind Speed: Min {weather_data['summary']['wind_speed']['min']:.2f} mph, Max {wea
                 
                 prompt += f"\n{param.capitalize()}: {direction}, Change: {change:.2f}, Rate: {rate:.2f}/hour"
         
-        prompt += "\n\nPlease provide clear, human-readable weather summaries that describe what actually happened during these time periods."
-        prompt += "\nFocus on observed conditions, patterns, and trends rather than future predictions."
-        prompt += "\nMake the weather report easy for humans to understand and interpret."
-        prompt += "\n\nPlease format your response as JSON with keys: prediction_12h, prediction_24h, reasoning, confidence"
+        prompt += """
+
+CRITICAL: You must return the response in this EXACT JSON format:
+{
+  "prediction_12h": {
+    "temperature": {
+      "min": <number>,
+      "max": <number>
+    },
+    "humidity": {
+      "min": <number>,
+      "max": <number>
+    },
+    "pressure": {
+      "min": <number>,
+      "max": <number>
+    },
+    "wind_speed": {
+      "min": <number>,
+      "max": <number>
+    }
+  },
+  "prediction_24h": {
+    "temperature": {
+      "min": <number>,
+      "max": <number>
+    },
+    "humidity": {
+      "min": <number>,
+      "max": <number>
+    },
+    "pressure": {
+      "min": <number>,
+      "max": <number>
+    },
+    "wind_speed": {
+      "min": <number>,
+      "max": <number>
+    }
+  },
+  "reasoning": "<string describing your analysis of the observed weather patterns and trends>",
+  "confidence": <number between 0.0 and 1.0>
+}
+
+For prediction_12h and prediction_24h, use the observed data ranges but you may extrapolate slightly based on trends. Focus on what the data shows rather than making wild predictions. The reasoning should explain the observed patterns and trends in the data."""
         
         # Log the API request (without the key)
         logger.info(f"Calling LLM API: {api_url}")
@@ -139,7 +178,7 @@ Wind Speed: Min {weather_data['summary']['wind_speed']['min']:.2f} mph, Max {wea
             json={
                 "model": model_name,
                 "messages": [
-                    {"role": "system", "content": "You are a weather analysis assistant that creates human-readable weather reports based on observed data. Focus on summarizing actual weather conditions and trends rather than making predictions."},
+                    {"role": "system", "content": "You are a weather analysis assistant that analyzes observed weather data and provides structured data in the exact format requested. Focus on observed data patterns and trends rather than future predictions, but format as if they were predictions for system compatibility."},
                     {"role": "user", "content": prompt}
                 ],
                 "response_format": {"type": "json_object"}
