@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-LLM Service for Weather Predictions
+LLM Service for Weather Reports
 
 This module handles all interactions with the LLM API for generating
-weather predictions based on collected weather data.
+human-readable weather reports based on collected weather data.
+Note: Output maintains prediction format for downstream compatibility.
 """
 import os
 import sys
@@ -73,13 +74,13 @@ def get_trend_data(location):
 
 def call_prediction_api(weather_data):
     """
-    Call an external LLM API to generate weather predictions
+    Call an external LLM API to generate weather reports based on observed data
     
     Args:
         weather_data: Dictionary with weather summary data
         
     Returns:
-        Dictionary with prediction results or None if failed
+        Dictionary with weather report results in prediction format for compatibility
     """
     try:
         # Get API key from environment variable
@@ -96,11 +97,11 @@ def call_prediction_api(weather_data):
         
         # Construct the prompt for the LLM
         prompt = f"""
-Based on the following weather data from {weather_data['location']} on {weather_data['date']}, please provide:
-1. A 12-hour weather prediction
-2. A 24-hour weather prediction
-3. Your reasoning based on the trends
-4. A confidence score (0.0-1.0)
+Based on the following weather data from {weather_data['location']} on {weather_data['date']}, please provide a human-readable weather report:
+1. A summary of weather conditions over the last 12 hours (return as 'prediction_12h')
+2. A summary of notable weather patterns and trends over the last 24 hours (return as 'prediction_24h')
+3. Your analysis and reasoning based on the observed data trends
+4. A confidence score (0.0-1.0) based on data completeness and consistency
 
 Current weather summary:
 Temperature: Min {weather_data['summary']['temperature']['min']:.2f}°C, Max {weather_data['summary']['temperature']['max']:.2f}°C, Avg {weather_data['summary']['temperature']['avg']:.2f}°C
@@ -111,7 +112,7 @@ Wind Speed: Min {weather_data['summary']['wind_speed']['min']:.2f} mph, Max {wea
         
         # Add trend data if available
         if weather_data.get('recent_trends'):
-            prompt += "\nRecent trends (over last 12 hours):"
+            prompt += "\nObserved trends (over last 12 hours):"
             for param, trend_data in weather_data['recent_trends'].items():
                 direction = trend_data.get('direction', 'stable')
                 change = trend_data.get('change', 0)
@@ -119,7 +120,9 @@ Wind Speed: Min {weather_data['summary']['wind_speed']['min']:.2f} mph, Max {wea
                 
                 prompt += f"\n{param.capitalize()}: {direction}, Change: {change:.2f}, Rate: {rate:.2f}/hour"
         
-        prompt += "\n\nPlease explain your reasoning using standard parlance, make the weather report easy for humans to understand and apply."
+        prompt += "\n\nPlease provide clear, human-readable weather summaries that describe what actually happened during these time periods."
+        prompt += "\nFocus on observed conditions, patterns, and trends rather than future predictions."
+        prompt += "\nMake the weather report easy for humans to understand and interpret."
         prompt += "\n\nPlease format your response as JSON with keys: prediction_12h, prediction_24h, reasoning, confidence"
         
         # Log the API request (without the key)
@@ -136,7 +139,7 @@ Wind Speed: Min {weather_data['summary']['wind_speed']['min']:.2f} mph, Max {wea
             json={
                 "model": model_name,
                 "messages": [
-                    {"role": "system", "content": "You are a weather forecasting assistant that analyzes weather data and provides predictions in JSON format."},
+                    {"role": "system", "content": "You are a weather analysis assistant that creates human-readable weather reports based on observed data. Focus on summarizing actual weather conditions and trends rather than making predictions."},
                     {"role": "user", "content": prompt}
                 ],
                 "response_format": {"type": "json_object"}
@@ -151,7 +154,7 @@ Wind Speed: Min {weather_data['summary']['wind_speed']['min']:.2f} mph, Max {wea
             
             # Parse the JSON response from the LLM
             prediction = json.loads(prediction_text)
-            logger.info(f"Successfully received prediction: {json.dumps(prediction)[:100]}...")
+            logger.info(f"Successfully received weather report: {json.dumps(prediction)[:100]}...")
             return prediction
         else:
             logger.error(f"API request failed with status code {response.status_code}: {response.text}")
@@ -165,16 +168,18 @@ Wind Speed: Min {weather_data['summary']['wind_speed']['min']:.2f} mph, Max {wea
 @with_db_connection
 def generate_weather_prediction(db=None, date=None, force=False, hours_to_analyze=12):
     """
-    Generate weather predictions using LLM based on recent hourly measurements
+    Generate weather reports using LLM based on recent hourly measurements
+    Note: Despite the function name, this now generates weather reports instead of predictions
+    to maintain compatibility with downstream services.
     
     Args:
         db: Database connection
-        date: Specific date to generate prediction for (format: YYYY-MM-DD)
-        force: Whether to force regeneration of prediction even if a recent one exists
+        date: Specific date to generate report for (format: YYYY-MM-DD)
+        force: Whether to force regeneration of report even if a recent one exists
         hours_to_analyze: Number of hours of data to analyze (default: 12)
         
     Returns:
-        The prediction document or None if failed
+        The weather report document or None if failed
     """
     try:
         if db is None:
@@ -222,7 +227,7 @@ def generate_weather_prediction(db=None, date=None, force=False, hours_to_analyz
         # Step 6: Call the LLM API
         prediction_result = call_prediction_api(prompt_data)
         if not prediction_result:
-            logger.error("Failed to get prediction from LLM API")
+            logger.error("Failed to get weather report from LLM API")
             return None        # Step 7: Store the prediction
         prediction_doc = {
             "date": current_date,
@@ -252,7 +257,7 @@ def generate_weather_prediction(db=None, date=None, force=False, hours_to_analyz
         
         # Insert the prediction
         result = db['weather_predictions'].insert_one(prediction_doc)
-        logger.info(f"Stored new weather prediction for {current_date} with ID: {result.inserted_id}")
+        logger.info(f"Stored new weather report for {current_date} with ID: {result.inserted_id}")
         
         # Debug: Retrieve the document back to check how it's stored
         stored_doc = db['weather_predictions'].find_one({"_id": result.inserted_id})
