@@ -2,8 +2,8 @@ name: Scheduled Weather LLM Service Run
 
 on:
   schedule:
-    # Runs at 6am and 6pm UTC every day
-    - cron: '0 6,18 * * *'
+    # Runs at 12pm and 10pm UTC every day
+    - cron: '0 12,22 * * *'
   workflow_dispatch:  # Allows manual triggering of the workflow
 
 jobs:
