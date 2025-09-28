@@ -158,7 +158,7 @@ CRITICAL: You must return the response in this EXACT JSON format:
       "max": <number>
     }
   },
-  "reasoning": "<string describing your analysis of the observed weather patterns and trends>",
+  "reasoning": "<string describing your analysis of the observed weather patterns and trends and clothing suggestions>",
   "confidence": <number between 0.0 and 1.0>
 }
 
