@@ -55,7 +55,8 @@ async def request_prediction(
         generate_weather_prediction, 
         db, 
         date=request.date,
-        force=request.force
+        force_cache_overwrite=request.force,
+        hours_to_analyze=None  # None lets the service pick the env default
     )
     
     return PredictionResponse(

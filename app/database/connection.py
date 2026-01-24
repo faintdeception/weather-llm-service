@@ -29,6 +29,10 @@ def get_database():
         mongo_uri = os.getenv("MONGO_URI")
         db_name = os.getenv("MONGO_DB")
         logger.info(f"Creating new MongoDB connection to {db_name}")
+        if not mongo_uri:
+            raise ValueError("MONGO_URI is not set in environment")
+        if not db_name:
+            raise ValueError("MONGO_DB is not set in environment")
         _mongo_client = MongoClient(mongo_uri)
         return _mongo_client[db_name]
     
@@ -36,7 +40,10 @@ def get_database():
     try:
         # Ping the database
         _mongo_client.admin.command('ping')
-        return _mongo_client[os.getenv("MONGO_DB")]
+        db_name = os.getenv("MONGO_DB")
+        if not db_name:
+            raise ValueError("MONGO_DB is not set in environment")
+        return _mongo_client[db_name]
     except Exception as e:
         logger.warning(f"MongoDB connection check failed: {str(e)}")
         # Reconnect if connection was closed

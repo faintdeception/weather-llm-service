@@ -43,6 +43,7 @@ coverage.xml
 venv/
 env/
 ENV/
+.venv/
 .env
 
 # IDE specific files
