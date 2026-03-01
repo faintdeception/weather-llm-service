@@ -41,6 +41,7 @@ pip install -r requirements.txt
 2. Configure environment variables in `.env`:
 ```
 LLM_API_KEY=your_api_key_here
+LLM_TEMPERATURE=0.8
 MONGO_URI=your_mongodb_connection
 MONGO_DB=weather
 LOCAL_TIMEZONE=America/New_York

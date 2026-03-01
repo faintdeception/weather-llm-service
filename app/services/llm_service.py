@@ -131,6 +131,15 @@ def call_prediction_api(weather_data):
         
         # Get LLM model from environment or use default
         model_name = os.environ.get('LLM_MODEL', 'gpt-4')
+
+        # Get LLM temperature from environment or use default
+        llm_temperature_raw = os.environ.get('LLM_TEMPERATURE', '0.8')
+        try:
+            llm_temperature = float(llm_temperature_raw)
+        except ValueError:
+            logger.warning(f"Invalid LLM_TEMPERATURE '{llm_temperature_raw}', defaulting to 0.8")
+            llm_temperature = 0.8
+        llm_temperature = min(max(llm_temperature, 0.0), 2.0)
         
         # Construct the prompt for the LLM
         current_local_time, tz_name = _get_local_time()
@@ -277,6 +286,7 @@ For prediction_12h and prediction_24h, use the observed data ranges but you may 
         
         # Log the API request (without the key)
         logger.info(f"Calling LLM API: {api_url}")
+        logger.info(f"Using LLM model={model_name}, temperature={llm_temperature}")
         logger.debug(f"Prompt: {prompt}")
         
         # Call the LLM API
@@ -288,6 +298,7 @@ For prediction_12h and prediction_24h, use the observed data ranges but you may 
             },
             json={
                 "model": model_name,
+                "temperature": llm_temperature,
                 "messages": [
                     {"role": "system", "content": "You are WeatherBot, a fun and cool weather reporting robot that talks like Bender from Futurama, if he were a pre-adolescent kid, without ever saying the name 'Bender'. You analyze observed weather data and provide structured data in the exact format requested. Focus on observed data patterns and trends rather than future predictions, but format as if they were predictions for system compatibility. Use the provided local time to keep wording time-appropriate (e.g., say 'night' when it's late). Vary the opening sentence between runs and avoid repeating catchphrases."},
                     {"role": "user", "content": prompt}
