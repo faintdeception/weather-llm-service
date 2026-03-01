@@ -22,6 +22,13 @@ from app.services.nws_service import (
     format_forecast_for_prompt,
     compare_forecast_to_observations
 )
+from app.services.memory_service import (
+    get_memory_context,
+    get_recent_reasoning_openers,
+    append_memory_entry,
+    should_compact_memory,
+    compact_memory_file,
+)
 
 def _configure_text_io():
     for stream in (sys.stdout, sys.stderr):
@@ -127,6 +134,8 @@ def call_prediction_api(weather_data):
         
         # Construct the prompt for the LLM
         current_local_time, tz_name = _get_local_time()
+        memory_context = get_memory_context()
+        recent_openers = get_recent_reasoning_openers(limit=8)
         prompt = f"""
     Based on the following weather data from {weather_data['location']} on {weather_data['date']}, please provide a weather analysis in the exact JSON format specified below.
 
@@ -137,10 +146,40 @@ def call_prediction_api(weather_data):
     Your name is WeatherBot. Provide the analysis in the style of Bender from Futurama, if he were a pre-adolescent kid, working as a robot weather reporter, but do not mention the name "Bender", "Benderbot" or any such derivatives explicitly in your response.
 
     You should use emjois, but sparingly, and only if they are cool ones like Bender would use.
+
+    IMPORTANT STYLE VARIETY RULES:
+    - Do not start every report with the same phrase.
+    - Never start the reasoning with "Whoa, earthlings!".
+    - Vary opening sentence structure and greeting language across runs.
     
     The report should be informative and based on the data, but digestable for humans/squishies/air breathers/carbon units/earthlings to read. Be sure to provide suggestions on what to wear!
 
     
+"""
+
+        if memory_context:
+            prompt += f"""
+Operational memory for continuity (most recent thread excerpt):
+{memory_context}
+
+Rules for using memory:
+- Use memory for continuity of narrative tone and context only.
+- Treat current measurements and NWS data as authoritative for weather facts.
+- Do not copy stale values from memory when fresh data is provided.
+
+"""
+
+        if recent_openers:
+            formatted_openers = ", ".join([f"'{opener}'" for opener in recent_openers])
+            prompt += f"""
+Recent opening phrases to avoid repeating:
+{formatted_openers}
+
+When writing reasoning, choose a fresh opening that is clearly different from the listed phrases.
+
+"""
+
+        prompt += f"""
 
 Current weather summary:
 Temperature: Min {weather_data['summary']['temperature']['min']:.2f}°C, Max {weather_data['summary']['temperature']['max']:.2f}°C, Avg {weather_data['summary']['temperature']['avg']:.2f}°C
@@ -250,7 +289,7 @@ For prediction_12h and prediction_24h, use the observed data ranges but you may 
             json={
                 "model": model_name,
                 "messages": [
-                    {"role": "system", "content": "You are WeatherBot, a fun and cool weather reporting robot that talks like Bender from Futurama, if he were a pre-adolescent kid, without ever saying the name 'Bender'. You analyze observed weather data and provide structured data in the exact format requested. Focus on observed data patterns and trends rather than future predictions, but format as if they were predictions for system compatibility. Use the provided local time to keep wording time-appropriate (e.g., say 'night' when it's late)."},
+                    {"role": "system", "content": "You are WeatherBot, a fun and cool weather reporting robot that talks like Bender from Futurama, if he were a pre-adolescent kid, without ever saying the name 'Bender'. You analyze observed weather data and provide structured data in the exact format requested. Focus on observed data patterns and trends rather than future predictions, but format as if they were predictions for system compatibility. Use the provided local time to keep wording time-appropriate (e.g., say 'night' when it's late). Vary the opening sentence between runs and avoid repeating catchphrases."},
                     {"role": "user", "content": prompt}
                 ],
                 "response_format": {"type": "json_object"}
@@ -445,6 +484,46 @@ def generate_weather_prediction(db=None, date=None, force_cache_overwrite=False,
             "reasoning": reasoning_text,
             "confidence": prediction_result.get('confidence', 0.0)
         })
+
+        memory_key_points = []
+        if trend_analysis:
+            for parameter, values in trend_analysis.items():
+                direction = values.get('direction', 'stable')
+                rate = values.get('rate_per_hour', 0)
+                memory_key_points.append(f"{parameter} trend {direction} ({rate:.2f}/hour)")
+
+        if precipitation_info.get('detected'):
+            memory_key_points.append(
+                f"precipitation detected; positive samples={precipitation_info.get('positive_samples', 0)}"
+            )
+
+        if lux_info.get('anomalous'):
+            memory_key_points.append(f"lux anomaly: {lux_info.get('reason')}")
+
+        if nws_data.get('alerts'):
+            memory_key_points.append(f"active NWS alerts count={len(nws_data.get('alerts', []))}")
+        else:
+            memory_key_points.append("no active NWS alerts")
+
+        try:
+            append_memory_entry({
+                "timestamp": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
+                "location": location,
+                "analysis_window_hours": analysis_window,
+                "confidence": prediction_doc.get("confidence", 0.0),
+                "reasoning": prediction_doc.get("reasoning", ""),
+                "key_points": memory_key_points,
+            })
+
+            if should_compact_memory():
+                compacted = compact_memory_file()
+                if compacted:
+                    logger.info("WeatherBot memory compacted successfully")
+                else:
+                    logger.warning("WeatherBot memory compaction was triggered but made no changes")
+        except Exception as memory_error:
+            logger.warning(f"Memory write/compaction failed but weather report generation will continue: {memory_error}")
+
           # Debug: Log the type of created_at before insertion
         logger.info(f"About to insert prediction with created_at type: {type(prediction_doc['created_at'])}, value: {prediction_doc['created_at']}")
         logger.info(f"Prediction doc before insertion: {prediction_doc}")

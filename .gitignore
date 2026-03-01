@@ -59,6 +59,7 @@ ENV/
 .env.development.local
 .env.test.local
 .env.production.local
+logs/weatherbot_memory.md
 
 # Model files and data
 models/

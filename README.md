@@ -41,9 +41,16 @@ pip install -r requirements.txt
 2. Configure environment variables in `.env`:
 ```
 LLM_API_KEY=your_api_key_here
-MONGODB_CONNECTION_STRING=your_mongodb_connection
+MONGO_URI=your_mongodb_connection
+MONGO_DB=weather
 LOCAL_TIMEZONE=America/New_York
 ANALYSIS_WINDOW_HOURS=3
+WEATHERBOT_MEMORY_FILE=logs/weatherbot_memory.md
+WEATHERBOT_MEMORY_MAX_CONTEXT_CHARS=3500
+WEATHERBOT_MEMORY_MAX_FILE_BYTES=262144
+WEATHERBOT_MEMORY_KEEP_RECENT_RUNS=192
+WEATHERBOT_MEMORY_COMPACT_AT_RATIO=0.9
+WEATHERBOT_MEMORY_TARGET_RATIO=0.75
 ```
 
 3. Run manually:
