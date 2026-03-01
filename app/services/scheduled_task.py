@@ -2,9 +2,9 @@
 """
 Scheduled Task for Weather Reports
 
-This script is designed to run at 6am and 6pm to generate weather reports
-based on the previous 12 hours of data. Reports are stored in prediction format
-for downstream compatibility.
+This script runs every 15 minutes via Windows Task Scheduler to generate weather reports
+based on recent data. Reports include NWS alerts and forecasts for enhanced severe weather
+detection. Reports are stored in prediction format for downstream compatibility.
 """
 import os
 import logging
@@ -43,11 +43,11 @@ def main():
     logger.info("Starting scheduled weather report generation task")
     logger.info(f"stdout encoding: {sys.stdout.encoding}, stderr encoding: {sys.stderr.encoding}")
     
-    try:        # Get the current hour to include in the log for clarity on which run this is (6am or 6pm)
+    try:
+        # Get the current time for logging
         from datetime import datetime, timezone
-        current_hour = datetime.now(timezone.utc).hour
-        am_pm = "AM" if current_hour < 12 else "PM"
-        logger.info(f"Running scheduled job at {current_hour}:00 {am_pm} UTC")
+        current_time = datetime.now(timezone.utc)
+        logger.info(f"Running scheduled job at {current_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
         
         # Use the configured analysis window (env-driven, default 3h)
         hours_to_analyze = ANALYSIS_WINDOW_HOURS
@@ -56,7 +56,7 @@ def main():
         measurements = get_measurements(hours=hours_to_analyze)
         if not measurements or len(measurements) == 0:
             logger.error(f"No measurements found for the last {hours_to_analyze} hours")
-            sys.exit(1)
+            # sys.exit(1)
             
         logger.info(f"Retrieved {len(measurements)} measurements for analysis")
         

@@ -16,6 +16,12 @@ from zoneinfo import ZoneInfo
 import requests
 from pymongo import MongoClient
 from app.database.connection import get_database, with_db_connection
+from app.services.nws_service import (
+    get_nws_data,
+    format_alerts_for_prompt,
+    format_forecast_for_prompt,
+    compare_forecast_to_observations
+)
 
 def _configure_text_io():
     for stream in (sys.stdout, sys.stderr):
@@ -126,11 +132,13 @@ def call_prediction_api(weather_data):
 
     Current local time: {current_local_time.strftime('%Y-%m-%d %H:%M %Z')} (timezone: {tz_name}). Match your narrative and clothing suggestions to the time of day (morning/afternoon/evening/night) and avoid saying "day" if it is currently night.
 
-    Your name is WeatherBot. Provide the analysis in the style of Bender from Futurama working as a robot weather reporter, but do not mention the name "Bender", "Benderbot" or any such derivatives explicitly in your response.
+    Don't use the slur "meatbags" or any derivatives in your response. Use terms like "humans", "squishies", "air breathers", "carbon units", or "earthlings" instead.
+    
+    Your name is WeatherBot. Provide the analysis in the style of Bender from Futurama, if he were a pre-adolescent kid, working as a robot weather reporter, but do not mention the name "Bender", "Benderbot" or any such derivatives explicitly in your response.
 
     You should use emjois, but sparingly, and only if they are cool ones like Bender would use.
     
-    The report should be informative and based on the data, but digestable for humans/meatbags/carbon units/earthlings to read. Be sure to provide suggestions on what to wear!
+    The report should be informative and based on the data, but digestable for humans/squishies/air breathers/carbon units/earthlings to read. Be sure to provide suggestions on what to wear!
 
     
 
@@ -159,6 +167,28 @@ Wind Speed: Min {weather_data['summary']['wind_speed']['min']:.2f} mph, Max {wea
             fields = ", ".join(precipitation.get('fields', []))
             detail = f" (fields: {fields})" if fields else ""
             prompt += f"\nPrecipitation detected in the last {precip_window} hours{detail}."
+        
+        # Add lux anomaly if detected (only when contextually interesting)
+        lux_anomaly = weather_data.get('lux_anomaly')
+        if lux_anomaly and lux_anomaly.get('anomalous'):
+            prompt += f"\n\n⚠️ LIGHT LEVEL ANOMALY: {lux_anomaly['reason']}"
+            # Extra emphasis if there are also weather alerts
+            if weather_data.get('nws_data', {}).get('alerts'):
+                prompt += " This correlates with active weather alerts!"
+        
+        # Add NWS alerts and forecast data
+        nws_data = weather_data.get('nws_data')
+        if nws_data:
+            prompt += "\n\n" + "="*60 + "\n"
+            prompt += format_alerts_for_prompt(nws_data.get('alerts', []))
+            prompt += "\n" + "="*60 + "\n"
+            prompt += format_forecast_for_prompt(nws_data.get('forecast'))
+            prompt += compare_forecast_to_observations(nws_data.get('forecast'), weather_data['summary'])
+            prompt += "\n" + "="*60
+            
+            # Add specific instruction about alerts
+            if nws_data.get('alerts'):
+                prompt += "\n\nIMPORTANT: Active weather alerts are present! Please comment on these exceptional weather conditions in your analysis and provide appropriate safety advice and clothing recommendations."
         
         prompt += """
 
@@ -220,7 +250,7 @@ For prediction_12h and prediction_24h, use the observed data ranges but you may 
             json={
                 "model": model_name,
                 "messages": [
-                    {"role": "system", "content": "You are WeatherBot, a fun and cool weather reporting robot that talks like Bender from Futurama without ever saying the name 'Bender'. You analyze observed weather data and provide structured data in the exact format requested. Focus on observed data patterns and trends rather than future predictions, but format as if they were predictions for system compatibility. Use the provided local time to keep wording time-appropriate (e.g., say 'night' when it's late)."},
+                    {"role": "system", "content": "You are WeatherBot, a fun and cool weather reporting robot that talks like Bender from Futurama, if he were a pre-adolescent kid, without ever saying the name 'Bender'. You analyze observed weather data and provide structured data in the exact format requested. Focus on observed data patterns and trends rather than future predictions, but format as if they were predictions for system compatibility. Use the provided local time to keep wording time-appropriate (e.g., say 'night' when it's late)."},
                     {"role": "user", "content": prompt}
                 ],
                 "response_format": {"type": "json_object"}
@@ -281,16 +311,22 @@ def generate_weather_prediction(db=None, date=None, force_cache_overwrite=False,
         if not measurements or len(measurements) == 0:
             logger.warning(f"No measurements found for the last {analysis_window} hours")
 
-            # Build a fallback prediction that explains the data gap
-            latest_measurement = db['measurements'].find_one(
-                sort=[('timestamp_ms', -1)]
-            )
+            try:
+                # Build a fallback prediction that explains the data gap
+                latest_measurement = db['measurements'].find_one(
+                    sort=[('timestamp_ms', -1)]
+                )
+            except Exception as exc:
+                logger.error(f"Error retrieving latest measurement for fallback reasoning: {exc}")
+
             latest_ts = None
             latest_location = None
             if latest_measurement:
                 latest_ts = latest_measurement.get('timestamp_ms')
                 latest_location = latest_measurement.get('tags', {}).get('location')
 
+            logger.warning("Oli was here!")
+            
             last_seen = None
             if isinstance(latest_ts, datetime):
                 last_seen = latest_ts.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
@@ -347,6 +383,19 @@ def generate_weather_prediction(db=None, date=None, force_cache_overwrite=False,
 
         # Step 4b: Analyze precipitation
         precipitation_info = analyze_precipitation(measurements)
+        
+        # Step 4c: Analyze lux anomalies
+        lux_info = analyze_lux_anomaly(measurements)
+        if lux_info.get('anomalous'):
+            logger.info(f"Lux anomaly detected: {lux_info['reason']}")
+        
+        # Step 4d: Fetch NWS alerts and forecast
+        logger.info("Fetching NWS alerts and forecast data...")
+        nws_data = get_nws_data()
+        if nws_data.get('alerts'):
+            logger.info(f"Found {len(nws_data['alerts'])} active NWS alerts")
+        else:
+            logger.info("No active NWS alerts")
             
         # Step 5: Prepare data for the LLM
         prompt_data = {
@@ -355,7 +404,9 @@ def generate_weather_prediction(db=None, date=None, force_cache_overwrite=False,
             "summary": weather_summary,
             "recent_trends": trend_analysis,
             "analysis_window_hours": analysis_window,
-            "precipitation": precipitation_info
+            "precipitation": precipitation_info,
+            "lux_anomaly": lux_info,
+            "nws_data": nws_data
         }
         
         # Step 6: Call the LLM API
@@ -431,7 +482,7 @@ def check_recent_prediction(db=None, hours=12):
             
         hours_ago = datetime.now(timezone.utc) - timedelta(hours=hours)
         
-        recent_prediction = db['weather_predictions'].find_one(
+        recent_prediction = db['feather_predictions'].find_one(
             {'created_at': {'$gte': hours_ago}},
             sort=[('created_at', -1)]
         )
@@ -611,6 +662,98 @@ def analyze_precipitation(measurements):
         "fields": sorted(list(precip_fields)),
         "positive_samples": positive_samples
     }
+
+def analyze_lux_anomaly(measurements):
+    """
+    Analyze lux/light levels to detect anomalous conditions.
+    Only flags interesting cases like unusually dark during daytime or bright at night.
+    
+    Returns:
+        dict with anomaly detection status and context
+    """
+    if not measurements:
+        return {"anomalous": False, "reason": None, "lux_avg": None}
+    
+    # Extract lux values and timestamps
+    lux_readings = []
+    for m in measurements:
+        timestamp = m.get('timestamp_ms')
+        fields = m.get('fields', {})
+        
+        # Look for lux or light level fields
+        for key, val in fields.items():
+            if any(k in key.lower() for k in ['lux', 'light', 'illuminance']):
+                numeric_val = _extract_numeric_value(val)
+                if numeric_val is not None and timestamp:
+                    lux_readings.append({
+                        'value': numeric_val,
+                        'timestamp': timestamp
+                    })
+    
+    if not lux_readings:
+        return {"anomalous": False, "reason": None, "lux_avg": None}
+    
+    # Calculate average lux
+    avg_lux = sum(r['value'] for r in lux_readings) / len(lux_readings)
+    
+    # Get local time for the most recent reading
+    try:
+        tz = ZoneInfo(LOCAL_TIMEZONE)
+        latest_time = lux_readings[-1]['timestamp']
+        if isinstance(latest_time, datetime):
+            local_dt = latest_time.astimezone(tz)
+        else:
+            local_dt = datetime.now(tz)
+        
+        hour = local_dt.hour
+        
+        # Define thresholds based on time of day
+        # Daytime hours: 8am - 6pm (should be bright)
+        # Night hours: 10pm - 6am (should be dark)
+        # Twilight hours: 6am-8am, 6pm-10pm (variable)
+        
+        is_daytime = 8 <= hour < 18
+        is_nighttime = hour >= 22 or hour < 6
+        is_twilight = not (is_daytime or is_nighttime)
+        
+        # Thresholds (approximate lux levels):
+        # Full daylight: 10,000+ lux
+        # Overcast day: 1,000-10,000 lux  
+        # Very dark/storm: <500 lux during day
+        # Indoor/dark: <100 lux
+        # Night: typically <10 lux
+        
+        anomalous = False
+        reason = None
+        
+        if is_daytime:
+            if avg_lux < 500:
+                anomalous = True
+                if avg_lux < 100:
+                    reason = f"Unusually dark for midday (avg {avg_lux:.1f} lux at {hour}:00) - typical indoor lighting levels during daytime hours"
+                else:
+                    reason = f"Significantly reduced daylight (avg {avg_lux:.1f} lux at {hour}:00) - possible heavy cloud cover or storm conditions"
+        elif is_nighttime:
+            if avg_lux > 500:
+                anomalous = True
+                reason = f"Unusually bright for nighttime (avg {avg_lux:.1f} lux at {hour}:00)"
+        # Twilight hours - only flag extreme cases
+        elif is_twilight:
+            if avg_lux < 50 and hour < 20:  # Very dark during early evening
+                anomalous = True
+                reason = f"Darker than expected for {hour}:00 (avg {avg_lux:.1f} lux)"
+        
+        return {
+            "anomalous": anomalous,
+            "reason": reason,
+            "lux_avg": avg_lux,
+            "hour": hour,
+            "time_period": "daytime" if is_daytime else "nighttime" if is_nighttime else "twilight"
+        }
+        
+    except Exception as e:
+        logger.warning(f"Error analyzing lux anomaly: {e}")
+        return {"anomalous": False, "reason": None, "lux_avg": avg_lux}
 
 def prepare_weather_summary(measurements):
     """
