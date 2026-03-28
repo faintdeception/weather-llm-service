@@ -1088,6 +1088,10 @@ def analyze_lux_anomaly(measurements, nws_data=None):
             default=None,
         )
         if isinstance(latest_time, datetime):
+            # Mongo clients without tz-aware decoding can return naive UTC datetimes.
+            # Interpret naive values as UTC before converting to local time.
+            if latest_time.tzinfo is None:
+                latest_time = latest_time.replace(tzinfo=timezone.utc)
             local_dt = latest_time.astimezone(tz)
         else:
             local_dt = datetime.now(tz)
