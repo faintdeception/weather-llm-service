@@ -14,7 +14,6 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import requests
-from pymongo import MongoClient
 from app.database.connection import get_database, with_db_connection
 from app.services.nws_service import (
     get_nws_data,
@@ -578,6 +577,19 @@ def generate_weather_prediction(db=None, date=None, force_cache_overwrite=False,
         else:
             logger.info("No active NWS alerts")
 
+        # Cache the fetched NWS payload so downstream services can reuse it
+        # without calling api.weather.gov directly.
+        snapshot_id = store_nws_snapshot(
+            nws_data=nws_data,
+            db=db,
+            report_date=current_date,
+            location=location,
+        )
+        if snapshot_id:
+            logger.info(f"Stored NWS snapshot with ID: {snapshot_id}")
+        else:
+            logger.warning("NWS snapshot was not stored")
+
         # Step 4d: Analyze lux anomalies with daylight context when available
         lux_info = analyze_lux_anomaly(measurements, nws_data=nws_data)
         if lux_info.get('anomalous'):
@@ -713,7 +725,7 @@ def check_recent_prediction(db=None, hours=12):
             
         hours_ago = datetime.now(timezone.utc) - timedelta(hours=hours)
         
-        recent_prediction = db['feather_predictions'].find_one(
+        recent_prediction = db['weather_predictions'].find_one(
             {'created_at': {'$gte': hours_ago}},
             sort=[('created_at', -1)]
         )
@@ -721,6 +733,48 @@ def check_recent_prediction(db=None, hours=12):
         return recent_prediction
     except Exception as e:
         logger.error(f"Error checking for recent prediction: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return None
+
+
+@with_db_connection
+def store_nws_snapshot(nws_data, db=None, report_date=None, location=None):
+    """
+    Persist one fetched NWS payload so downstream consumers can use cached data.
+
+    Args:
+        nws_data: Payload returned by get_nws_data
+        db: Database connection (optional)
+        report_date: Report date in YYYY-MM-DD format
+        location: Location identifier derived from local measurements
+
+    Returns:
+        Inserted snapshot ID as string, or None on failure
+    """
+    try:
+        if db is None:
+            db = get_database()
+
+        if not isinstance(nws_data, dict):
+            logger.warning("Skipping NWS snapshot persistence: payload is not a dict")
+            return None
+
+        snapshot_doc = {
+            "report_date": report_date,
+            "location": location,
+            "created_at": datetime.now(timezone.utc),
+            "fetched_at": nws_data.get("fetched_at"),
+            "nws_data": {
+                "alerts": nws_data.get("alerts", []),
+                "forecast": nws_data.get("forecast"),
+                "location": nws_data.get("location"),
+            },
+        }
+
+        result = db["nws_snapshots"].insert_one(snapshot_doc)
+        return str(result.inserted_id)
+    except Exception as e:
+        logger.error(f"Error storing NWS snapshot: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         return None
 

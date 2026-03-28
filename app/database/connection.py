@@ -14,6 +14,22 @@ logger = logging.getLogger("llm-service")
 
 # Global client reference
 _mongo_client = None
+_indexes_initialized = False
+
+
+def _ensure_indexes(db):
+    """Ensure required MongoDB indexes are present for service-managed collections."""
+    global _indexes_initialized
+    if _indexes_initialized:
+        return
+
+    # Keep cached NWS snapshots for 7 days to avoid repeated NWS calls.
+    db["nws_snapshots"].create_index(
+        [("created_at", 1)],
+        expireAfterSeconds=7 * 24 * 60 * 60,
+        name="nws_snapshots_created_at_ttl_7d",
+    )
+    _indexes_initialized = True
 
 def get_database():
     """
@@ -22,7 +38,7 @@ def get_database():
     Returns:
         MongoDB database object
     """
-    global _mongo_client
+    global _mongo_client, _indexes_initialized
     
     # Create new connection if needed
     if _mongo_client is None:
@@ -34,7 +50,10 @@ def get_database():
         if not db_name:
             raise ValueError("MONGO_DB is not set in environment")
         _mongo_client = MongoClient(mongo_uri)
-        return _mongo_client[db_name]
+        _indexes_initialized = False
+        db = _mongo_client[db_name]
+        _ensure_indexes(db)
+        return db
     
     # Test if connection is still alive
     try:
@@ -43,7 +62,9 @@ def get_database():
         db_name = os.getenv("MONGO_DB")
         if not db_name:
             raise ValueError("MONGO_DB is not set in environment")
-        return _mongo_client[db_name]
+        db = _mongo_client[db_name]
+        _ensure_indexes(db)
+        return db
     except Exception as e:
         logger.warning(f"MongoDB connection check failed: {str(e)}")
         # Reconnect if connection was closed
@@ -55,7 +76,10 @@ def get_database():
         
         logger.info("Reconnecting to MongoDB")
         _mongo_client = MongoClient(os.getenv("MONGO_URI"))
-        return _mongo_client[os.getenv("MONGO_DB")]
+        _indexes_initialized = False
+        db = _mongo_client[os.getenv("MONGO_DB")]
+        _ensure_indexes(db)
+        return db
 
 def with_db_connection(func):
     """
@@ -89,11 +113,12 @@ def with_db_connection(func):
 
 def close_connection():
     """Close the MongoDB connection if it exists"""
-    global _mongo_client
+    global _mongo_client, _indexes_initialized
     if _mongo_client:
         try:
             _mongo_client.close()
             _mongo_client = None
+            _indexes_initialized = False
             logger.info("MongoDB connection closed")
         except Exception as e:
             logger.warning(f"Error closing MongoDB connection: {str(e)}")

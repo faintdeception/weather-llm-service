@@ -2,17 +2,15 @@
 API routes for the Weather LLM microservice
 """
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
-from pymongo import MongoClient
 from datetime import datetime, timedelta, timezone
 import logging
 
 from ..models.prediction import (
     PredictionRequest, 
     PredictionResponse, 
-    PredictionResult,
     ScheduleInfo
 )
-from ..services.llm_service import generate_weather_prediction, get_daily_report
+from ..services.llm_service import generate_weather_prediction
 
 # Configure logging
 logger = logging.getLogger("llm-service.api")
@@ -20,11 +18,25 @@ logger = logging.getLogger("llm-service.api")
 # Create API router
 router = APIRouter(prefix="/api/predictions", tags=["predictions"])
 
+
+def _jsonify(value):
+    """Convert Mongo-native values into JSON-safe primitives."""
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    if isinstance(value, dict):
+        return {k: _jsonify(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_jsonify(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
 # Dependency to get database connection
 def get_db():
     """Get MongoDB database connection"""
-    from ..database.connection import get_database, close_connection
-    import os
+    from ..database.connection import get_database
     
     # Get database using the proper connection manager
     db = get_database()
@@ -158,4 +170,59 @@ async def get_schedule_info(db = Depends(get_db)):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve schedule info: {str(e)}"
+        )
+
+
+@router.get("/nws/latest")
+async def get_latest_nws_snapshot(db = Depends(get_db)):
+    """Get the most recent cached NWS payload."""
+    try:
+        snapshot = db['nws_snapshots'].find_one(sort=[('created_at', -1)])
+
+        if not snapshot:
+            return {
+                "success": False,
+                "message": "No cached NWS snapshot found",
+                "nws_snapshot": None,
+            }
+
+        return {
+            "success": True,
+            "message": "Latest cached NWS snapshot retrieved successfully",
+            "nws_snapshot": _jsonify(snapshot),
+        }
+    except Exception as e:
+        logger.exception(f"Error retrieving latest NWS snapshot: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve latest NWS snapshot: {str(e)}"
+        )
+
+
+@router.get("/nws/by-date/{date}")
+async def get_nws_snapshot_by_date(date: str, db = Depends(get_db)):
+    """Get the latest cached NWS payload associated with a report date (YYYY-MM-DD)."""
+    try:
+        snapshot = db['nws_snapshots'].find_one(
+            {'report_date': date},
+            sort=[('created_at', -1)]
+        )
+
+        if not snapshot:
+            return {
+                "success": False,
+                "message": f"No cached NWS snapshot found for date: {date}",
+                "nws_snapshot": None,
+            }
+
+        return {
+            "success": True,
+            "message": f"Cached NWS snapshot for {date} retrieved successfully",
+            "nws_snapshot": _jsonify(snapshot),
+        }
+    except Exception as e:
+        logger.exception(f"Error retrieving NWS snapshot for date {date}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve NWS snapshot: {str(e)}"
         )
