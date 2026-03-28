@@ -245,7 +245,7 @@ def format_alerts_for_prompt(alerts: List[Dict]) -> str:
     return alert_text
 
 
-def format_forecast_for_prompt(forecast: Optional[Dict]) -> str:
+def format_forecast_for_prompt(forecast: Optional[Dict], include_solar_timing: bool = True) -> str:
     """
     Format NWS forecast into a readable string for LLM prompt.
     
@@ -260,14 +260,15 @@ def format_forecast_for_prompt(forecast: Optional[Dict]) -> str:
     
     forecast_text = "NATIONAL WEATHER SERVICE FORECAST:\n"
 
-    sunrise = forecast.get("sunrise")
-    sunset = forecast.get("sunset")
-    if sunrise or sunset:
-        forecast_text += "\nSolar timing:\n"
-        if sunrise:
-            forecast_text += f"  Sunrise: {sunrise}\n"
-        if sunset:
-            forecast_text += f"  Sunset: {sunset}\n"
+    if include_solar_timing:
+        sunrise = forecast.get("sunrise")
+        sunset = forecast.get("sunset")
+        if sunrise or sunset:
+            forecast_text += "\nSolar timing:\n"
+            if sunrise:
+                forecast_text += f"  Sunrise: {sunrise}\n"
+            if sunset:
+                forecast_text += f"  Sunset: {sunset}\n"
     
     for period in forecast["periods"]:
         forecast_text += f"\n{period['name']}:\n"

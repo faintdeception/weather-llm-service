@@ -19,7 +19,6 @@ from app.services.nws_service import (
     get_nws_data,
     format_alerts_for_prompt,
     format_forecast_for_prompt,
-    format_daylight_for_prompt,
     compare_forecast_to_observations
 )
 from app.services.memory_service import (
@@ -52,6 +51,7 @@ ANALYSIS_WINDOW_HOURS = float(os.getenv("ANALYSIS_WINDOW_HOURS", "3"))
 LOCAL_TIMEZONE = os.getenv("LOCAL_TIMEZONE", "America/New_York")
 TWILIGHT_BUFFER_MINUTES = int(os.getenv("TWILIGHT_BUFFER_MINUTES", "45"))
 MAX_SOLAR_DAY_OFFSET = int(os.getenv("MAX_SOLAR_DAY_OFFSET", "1"))
+SOLAR_MENTION_WINDOW_MINUTES = int(os.getenv("SOLAR_MENTION_WINDOW_MINUTES", "60"))
 
 
 def _get_local_time():
@@ -192,6 +192,48 @@ def _request_confusion_addendum(api_url, api_key, model_name, issues, prediction
         logger.warning(f"Failed to generate confusion addendum: {exc}")
         return None
 
+
+def _build_solar_event_prompt_context(forecast, current_local_time):
+    """Return nearby sunrise/sunset context only when event is within +/- window minutes."""
+    context = {
+        "include_solar_timing": False,
+        "event_lines": [],
+    }
+
+    if not forecast or not isinstance(current_local_time, datetime):
+        return context
+
+    tz = current_local_time.tzinfo or timezone.utc
+
+    for label, key in (("sunrise", "sunrise"), ("sunset", "sunset")):
+        raw_value = forecast.get(key)
+        event_dt = _parse_iso_datetime(raw_value)
+        if not event_dt:
+            continue
+
+        if event_dt.tzinfo is None:
+            event_dt = event_dt.replace(tzinfo=tz)
+
+        event_local = event_dt.astimezone(tz)
+        delta_minutes = (event_local - current_local_time).total_seconds() / 60.0
+        if abs(delta_minutes) > SOLAR_MENTION_WINDOW_MINUTES:
+            continue
+
+        context["include_solar_timing"] = True
+        rounded = int(round(abs(delta_minutes)))
+        if rounded == 0:
+            relation = "right now"
+        elif delta_minutes > 0:
+            relation = f"in about {rounded} minutes"
+        else:
+            relation = f"about {rounded} minutes ago"
+
+        context["event_lines"].append(
+            f"- Nearby {label}: {event_local.strftime('%Y-%m-%d %H:%M %Z')} ({relation})"
+        )
+
+    return context
+
 def call_prediction_api(weather_data):
     """
     Call an external LLM API to generate weather reports based on observed data
@@ -226,6 +268,8 @@ def call_prediction_api(weather_data):
         
         # Construct the prompt for the LLM
         current_local_time, tz_name = _get_local_time()
+        forecast_for_solar = (weather_data.get("nws_data") or {}).get("forecast") or {}
+        solar_event_context = _build_solar_event_prompt_context(forecast_for_solar, current_local_time)
         memory_context = get_memory_context()
         recent_openers = get_recent_reasoning_openers(limit=8)
         prompt = f"""
@@ -245,6 +289,8 @@ def call_prediction_api(weather_data):
     - Vary opening sentence structure and greeting language across runs.
     
     The report should be informative and based on the data, but digestable for humans/squishies/air breathers/carbon units/earthlings to read. Be sure to provide suggestions on what to wear!
+
+    Only mention sunrise/sunset timing when a "Nearby solar event context" section is provided. Otherwise, do not speculate about sunrise/sunset timing.
 
     
 """
@@ -313,10 +359,6 @@ Wind Speed: Min {weather_data['summary']['wind_speed']['min']:.2f} mph, Max {wea
                 prompt += f"\n- Daylight data quality: {daylight_ctx.get('daylight_data_quality')}"
             if daylight_ctx.get('source_day_offset_days') is not None:
                 prompt += f"\n- Source day offset: {daylight_ctx.get('source_day_offset_days')}"
-            if daylight_ctx.get('sunrise'):
-                prompt += f"\n- Sunrise: {daylight_ctx.get('sunrise')}"
-            if daylight_ctx.get('sunset'):
-                prompt += f"\n- Sunset: {daylight_ctx.get('sunset')}"
             if fallback_reason:
                 prompt += f"\n- Fallback reason: {fallback_reason}"
 
@@ -332,13 +374,14 @@ Wind Speed: Min {weather_data['summary']['wind_speed']['min']:.2f} mph, Max {wea
             prompt += "\n\n" + "="*60 + "\n"
             prompt += format_alerts_for_prompt(nws_data.get('alerts', []))
             prompt += "\n" + "="*60 + "\n"
-            prompt += format_forecast_for_prompt(nws_data.get('forecast'))
-            daylight_prompt = format_daylight_for_prompt(
+            prompt += format_forecast_for_prompt(
                 nws_data.get('forecast'),
-                twilight_buffer_minutes=TWILIGHT_BUFFER_MINUTES,
+                include_solar_timing=solar_event_context.get("include_solar_timing", False),
             )
-            if daylight_prompt:
-                prompt += "\n" + daylight_prompt + "\n"
+            if solar_event_context.get("event_lines"):
+                prompt += "\nNearby solar event context:\n"
+                prompt += "\n".join(solar_event_context["event_lines"])
+                prompt += "\n"
             prompt += compare_forecast_to_observations(nws_data.get('forecast'), weather_data['summary'])
             prompt += "\n" + "="*60
             
