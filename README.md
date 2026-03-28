@@ -12,6 +12,8 @@ Weather reporting service that combines local sensor measurements with National 
 - **Trend Analysis**: Tracks weather parameter changes over time
 - **Precipitation Detection**: Identifies and reports rain/snow conditions
 - **Forecast Comparison**: Compares NWS predictions against actual sensor observations
+- **Daylight-Aware Lux Analysis**: Uses NWS sunrise/sunset data (instead of fixed clock hours) to evaluate unusual darkness/brightness
+- **Reliability Addendum**: Adds an explicit "hard failures" note when fallback/partial-data conditions may impact confidence
 
 ## NWS Integration
 
@@ -19,7 +21,12 @@ The service integrates with the [National Weather Service API](https://www.weath
 
 - **Active Alerts**: Winter storm warnings, cold weather advisories, severe weather alerts
 - **Official Forecasts**: Detailed predictions for the next 24-48 hours
+- **Solar Timing**: Sunrise and sunset values used for daylight-aware lux anomaly detection
 - **Safety Instructions**: NWS-provided guidance for severe weather events
+
+Lux anomaly detection uses a twilight buffer around sunrise/sunset so WeatherBot is resilient to seasonal day-length changes and daylight saving time transitions.
+
+If NWS sunrise/sunset arrives from an adjacent day (for example yesterday), WeatherBot reuses those solar times for the current day when the day offset is small. If hard failures or fallback paths are detected, the final reasoning includes a short addendum that calls out potential reporting impact.
 
 ### Configuration
 
@@ -46,6 +53,8 @@ MONGO_URI=your_mongodb_connection
 MONGO_DB=weather
 LOCAL_TIMEZONE=America/New_York
 ANALYSIS_WINDOW_HOURS=3
+TWILIGHT_BUFFER_MINUTES=45
+MAX_SOLAR_DAY_OFFSET=1
 WEATHERBOT_MEMORY_FILE=logs/weatherbot_memory.md
 WEATHERBOT_MEMORY_MAX_CONTEXT_CHARS=3500
 WEATHERBOT_MEMORY_MAX_FILE_BYTES=262144
@@ -75,6 +84,11 @@ Logs are stored in `$env:ProgramData\weather-llm-service\logs\`
 Test the NWS integration:
 ```bash
 python test_nws_integration.py
+```
+
+Test daylight-aware lux behavior:
+```bash
+python test_lux_awareness.py
 ```
 
 ## Architecture

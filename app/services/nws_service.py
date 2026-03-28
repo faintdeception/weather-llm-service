@@ -117,9 +117,10 @@ def get_nws_forecast(latitude: float = NWS_LATITUDE, longitude: float = NWS_LONG
         point_data = response.json()
         props = point_data.get("properties", {})
         
-        # Extract forecast URL
+        # Extract forecast URL and astronomical metadata
         forecast_url = props.get("forecast")
         forecast_hourly_url = props.get("forecastHourly")
+        astronomical_data = props.get("astronomicalData") or {}
         
         if not forecast_url:
             logger.error("No forecast URL found in NWS points response")
@@ -146,6 +147,8 @@ def get_nws_forecast(latitude: float = NWS_LATITUDE, longitude: float = NWS_LONG
             "gridId": props.get("gridId"),
             "gridX": props.get("gridX"),
             "gridY": props.get("gridY"),
+            "sunrise": astronomical_data.get("sunrise"),
+            "sunset": astronomical_data.get("sunset"),
             "periods": []
         }
         
@@ -256,6 +259,15 @@ def format_forecast_for_prompt(forecast: Optional[Dict]) -> str:
         return "No forecast data available."
     
     forecast_text = "NATIONAL WEATHER SERVICE FORECAST:\n"
+
+    sunrise = forecast.get("sunrise")
+    sunset = forecast.get("sunset")
+    if sunrise or sunset:
+        forecast_text += "\nSolar timing:\n"
+        if sunrise:
+            forecast_text += f"  Sunrise: {sunrise}\n"
+        if sunset:
+            forecast_text += f"  Sunset: {sunset}\n"
     
     for period in forecast["periods"]:
         forecast_text += f"\n{period['name']}:\n"
@@ -267,6 +279,34 @@ def format_forecast_for_prompt(forecast: Optional[Dict]) -> str:
             forecast_text += f"  Details: {period['detailedForecast']}\n"
     
     return forecast_text
+
+
+def format_daylight_for_prompt(forecast: Optional[Dict], twilight_buffer_minutes: int = 45) -> str:
+    """
+    Format sunrise/sunset context into a prompt-friendly summary.
+
+    Args:
+        forecast: Forecast dictionary returned by get_nws_forecast
+        twilight_buffer_minutes: Minutes to apply before sunrise and after sunset
+
+    Returns:
+        Formatted daylight context string, or empty string when unavailable
+    """
+    if not forecast:
+        return ""
+
+    sunrise = forecast.get("sunrise")
+    sunset = forecast.get("sunset")
+    if not sunrise and not sunset:
+        return ""
+
+    lines = ["DAYLIGHT CONTEXT (NWS):"]
+    if sunrise:
+        lines.append(f"- Sunrise: {sunrise}")
+    if sunset:
+        lines.append(f"- Sunset: {sunset}")
+    lines.append(f"- Twilight buffer: {twilight_buffer_minutes} minutes before sunrise and after sunset")
+    return "\n".join(lines)
 
 
 def compare_forecast_to_observations(forecast: Optional[Dict], weather_summary: Dict) -> str:

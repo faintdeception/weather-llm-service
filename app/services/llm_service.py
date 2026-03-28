@@ -20,6 +20,7 @@ from app.services.nws_service import (
     get_nws_data,
     format_alerts_for_prompt,
     format_forecast_for_prompt,
+    format_daylight_for_prompt,
     compare_forecast_to_observations
 )
 from app.services.memory_service import (
@@ -50,6 +51,8 @@ logger = logging.getLogger("llm-service")
 # Configurable lookback window (hours) for measurement analysis
 ANALYSIS_WINDOW_HOURS = float(os.getenv("ANALYSIS_WINDOW_HOURS", "3"))
 LOCAL_TIMEZONE = os.getenv("LOCAL_TIMEZONE", "America/New_York")
+TWILIGHT_BUFFER_MINUTES = int(os.getenv("TWILIGHT_BUFFER_MINUTES", "45"))
+MAX_SOLAR_DAY_OFFSET = int(os.getenv("MAX_SOLAR_DAY_OFFSET", "1"))
 
 
 def _get_local_time():
@@ -107,6 +110,95 @@ def get_trend_data(location):
     except Exception as e:
         logger.error(f"Error retrieving trend data: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
+        return None
+
+
+def _collect_reporting_issues(weather_data):
+    """Collect reliability issues that should be disclosed in the final narrative."""
+    issues = []
+
+    nws_data = weather_data.get("nws_data") or {}
+    forecast = nws_data.get("forecast")
+    if forecast is None:
+        issues.append("NWS forecast data unavailable")
+    elif not forecast.get("periods"):
+        issues.append("NWS forecast periods missing")
+
+    lux_info = weather_data.get("lux_anomaly") or {}
+    source = lux_info.get("classification_source")
+    fallback_reason = lux_info.get("fallback_reason")
+    daylight_ctx = lux_info.get("daylight_context") or {}
+    daylight_quality = daylight_ctx.get("daylight_data_quality")
+    offset_days = daylight_ctx.get("source_day_offset_days")
+
+    if source == "hour_fallback":
+        if fallback_reason:
+            issues.append(f"Daylight classifier fallback active: {fallback_reason}")
+        else:
+            issues.append("Daylight classifier fallback active")
+    elif daylight_quality == "adjacent_day_adjusted":
+        if isinstance(offset_days, int):
+            issues.append(f"Solar timing adjusted from nearby day (offset {offset_days:+d})")
+        else:
+            issues.append("Solar timing adjusted from nearby day")
+
+    return issues
+
+
+def _fallback_confusion_addendum(issues):
+    issue_text = "; ".join(issues)
+    return (
+        "Noticed Some Hard Failures that May Impact Reporting: "
+        f"I'm a little confused because {issue_text}. "
+        "I still used the best available data, but confidence may be slightly reduced."
+    )
+
+
+def _request_confusion_addendum(api_url, api_key, model_name, issues, prediction, base_temperature):
+    """Ask the LLM for a short reliability addendum after the main report is generated."""
+    try:
+        response = requests.post(
+            api_url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model_name,
+                "temperature": min(max(base_temperature, 0.0), 0.6),
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are WeatherBot. Produce a brief reliability disclaimer addendum in-character.",
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            "Given this weather report reasoning and issue list, return JSON with exactly one key 'addendum'. "
+                            "The addendum must start with 'Noticed Some Hard Failures that May Impact Reporting:' and be 1-2 sentences. "
+                            "Mention that WeatherBot is a little confused while staying helpful. "
+                            f"Issues: {issues}. "
+                            f"Existing reasoning: {prediction.get('reasoning', '')}"
+                        ),
+                    },
+                ],
+                "response_format": {"type": "json_object"},
+            },
+            timeout=45,
+        )
+        if response.status_code != 200:
+            logger.warning(f"Confusion addendum request failed with status {response.status_code}")
+            return None
+
+        payload = response.json()
+        content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+        addendum_obj = json.loads(content) if content else {}
+        addendum = addendum_obj.get("addendum")
+        if isinstance(addendum, str) and addendum.strip():
+            return addendum.strip()
+        return None
+    except Exception as exc:
+        logger.warning(f"Failed to generate confusion addendum: {exc}")
         return None
 
 def call_prediction_api(weather_data):
@@ -218,6 +310,25 @@ Wind Speed: Min {weather_data['summary']['wind_speed']['min']:.2f} mph, Max {wea
         
         # Add lux anomaly if detected (only when contextually interesting)
         lux_anomaly = weather_data.get('lux_anomaly')
+        if lux_anomaly:
+            daylight_ctx = lux_anomaly.get('daylight_context') or {}
+            source = lux_anomaly.get('classification_source', 'unknown')
+            fallback_reason = lux_anomaly.get('fallback_reason')
+            prompt += "\n\nDaylight-aware lux interpretation context:"
+            prompt += f"\n- Classification source: {source}"
+            prompt += f"\n- Time period at observation: {lux_anomaly.get('time_period', 'unknown')}"
+            prompt += f"\n- Twilight buffer: {daylight_ctx.get('twilight_buffer_minutes', TWILIGHT_BUFFER_MINUTES)} minutes"
+            if daylight_ctx.get('daylight_data_quality'):
+                prompt += f"\n- Daylight data quality: {daylight_ctx.get('daylight_data_quality')}"
+            if daylight_ctx.get('source_day_offset_days') is not None:
+                prompt += f"\n- Source day offset: {daylight_ctx.get('source_day_offset_days')}"
+            if daylight_ctx.get('sunrise'):
+                prompt += f"\n- Sunrise: {daylight_ctx.get('sunrise')}"
+            if daylight_ctx.get('sunset'):
+                prompt += f"\n- Sunset: {daylight_ctx.get('sunset')}"
+            if fallback_reason:
+                prompt += f"\n- Fallback reason: {fallback_reason}"
+
         if lux_anomaly and lux_anomaly.get('anomalous'):
             prompt += f"\n\n⚠️ LIGHT LEVEL ANOMALY: {lux_anomaly['reason']}"
             # Extra emphasis if there are also weather alerts
@@ -231,6 +342,12 @@ Wind Speed: Min {weather_data['summary']['wind_speed']['min']:.2f} mph, Max {wea
             prompt += format_alerts_for_prompt(nws_data.get('alerts', []))
             prompt += "\n" + "="*60 + "\n"
             prompt += format_forecast_for_prompt(nws_data.get('forecast'))
+            daylight_prompt = format_daylight_for_prompt(
+                nws_data.get('forecast'),
+                twilight_buffer_minutes=TWILIGHT_BUFFER_MINUTES,
+            )
+            if daylight_prompt:
+                prompt += "\n" + daylight_prompt + "\n"
             prompt += compare_forecast_to_observations(nws_data.get('forecast'), weather_data['summary'])
             prompt += "\n" + "="*60
             
@@ -315,6 +432,25 @@ For prediction_12h and prediction_24h, use the observed data ranges but you may 
             
             # Parse the JSON response from the LLM
             prediction = json.loads(prediction_text)
+
+            issues = _collect_reporting_issues(weather_data)
+            if issues:
+                addendum = _request_confusion_addendum(
+                    api_url=api_url,
+                    api_key=api_key,
+                    model_name=model_name,
+                    issues=issues,
+                    prediction=prediction,
+                    base_temperature=llm_temperature,
+                )
+                if not addendum:
+                    addendum = _fallback_confusion_addendum(issues)
+
+                existing_reasoning = prediction.get("reasoning", "")
+                prediction["reasoning"] = (
+                    f"{existing_reasoning.rstrip()}\n\n{addendum}" if existing_reasoning else addendum
+                )
+
             logger.info(f"Successfully received weather report: {json.dumps(prediction)[:100]}...")
             return prediction
         else:
@@ -433,19 +569,24 @@ def generate_weather_prediction(db=None, date=None, force_cache_overwrite=False,
 
         # Step 4b: Analyze precipitation
         precipitation_info = analyze_precipitation(measurements)
-        
-        # Step 4c: Analyze lux anomalies
-        lux_info = analyze_lux_anomaly(measurements)
-        if lux_info.get('anomalous'):
-            logger.info(f"Lux anomaly detected: {lux_info['reason']}")
-        
-        # Step 4d: Fetch NWS alerts and forecast
+
+        # Step 4c: Fetch NWS alerts and forecast
         logger.info("Fetching NWS alerts and forecast data...")
         nws_data = get_nws_data()
         if nws_data.get('alerts'):
             logger.info(f"Found {len(nws_data['alerts'])} active NWS alerts")
         else:
             logger.info("No active NWS alerts")
+
+        # Step 4d: Analyze lux anomalies with daylight context when available
+        lux_info = analyze_lux_anomaly(measurements, nws_data=nws_data)
+        if lux_info.get('anomalous'):
+            logger.info(f"Lux anomaly detected: {lux_info['reason']}")
+        if lux_info.get('classification_source') == 'hour_fallback':
+            logger.info(
+                "Lux anomaly classifier used hour fallback mode"
+                + (f" ({lux_info.get('fallback_reason')})" if lux_info.get('fallback_reason') else "")
+            )
             
         # Step 5: Prepare data for the LLM
         prompt_data = {
@@ -647,6 +788,113 @@ def _extract_numeric_stats(value):
         )
     return None, None, None
 
+
+def _parse_iso_datetime(raw_value):
+    """Parse API datetime strings with graceful support for non-ISO NWS formats."""
+    if not raw_value or not isinstance(raw_value, str):
+        return None
+
+    try:
+        return datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+    except Exception:
+        pass
+
+    # NWS astronomicalData is sometimes returned as MM/DD/YYYY HH:MM:SS.
+    for fmt in ("%m/%d/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(raw_value, fmt)
+        except Exception:
+            continue
+
+    return None
+
+
+def _build_daylight_windows(nws_data, reference_dt_local, tz):
+    """
+    Build sunrise/sunset and twilight windows from NWS forecast context.
+
+    Returns:
+        tuple: (windows dict or None, fallback_reason str or None)
+    """
+    if not nws_data:
+        return None, "missing_nws_data"
+
+    forecast = nws_data.get("forecast") or {}
+    raw_sunrise = forecast.get("sunrise")
+    raw_sunset = forecast.get("sunset")
+    if not raw_sunrise or not raw_sunset:
+        return None, "missing_sunrise_sunset"
+
+    sunrise_dt = _parse_iso_datetime(raw_sunrise)
+    sunset_dt = _parse_iso_datetime(raw_sunset)
+    if not sunrise_dt or not sunset_dt:
+        return None, "invalid_sunrise_sunset"
+
+    if sunrise_dt.tzinfo is None:
+        sunrise_dt = sunrise_dt.replace(tzinfo=tz)
+    if sunset_dt.tzinfo is None:
+        sunset_dt = sunset_dt.replace(tzinfo=tz)
+
+    sunrise_local = sunrise_dt.astimezone(tz)
+    sunset_local = sunset_dt.astimezone(tz)
+
+    ref_date = reference_dt_local.date()
+    sunrise_offset = (sunrise_local.date() - ref_date).days
+    sunset_offset = (sunset_local.date() - ref_date).days
+
+    if sunrise_offset != 0 or sunset_offset != 0:
+        if sunrise_offset == sunset_offset and abs(sunrise_offset) <= MAX_SOLAR_DAY_OFFSET:
+            # Reuse nearby-day solar clock times by shifting them to the target date.
+            sunrise_local = sunrise_local - timedelta(days=sunrise_offset)
+            sunset_local = sunset_local - timedelta(days=sunset_offset)
+            daylight_data_quality = "adjacent_day_adjusted"
+            source_day_offset_days = sunrise_offset
+        else:
+            return None, "sunrise_sunset_date_mismatch"
+    else:
+        daylight_data_quality = "same_day"
+        source_day_offset_days = 0
+
+    if sunrise_local >= sunset_local:
+        return None, "invalid_daylight_order"
+
+    buffer = timedelta(minutes=TWILIGHT_BUFFER_MINUTES)
+    windows = {
+        "sunrise": sunrise_local,
+        "sunset": sunset_local,
+        "dawn_start": sunrise_local - buffer,
+        "dusk_end": sunset_local + buffer,
+        "twilight_buffer_minutes": TWILIGHT_BUFFER_MINUTES,
+        "daylight_data_quality": daylight_data_quality,
+        "source_day_offset_days": source_day_offset_days,
+    }
+    return windows, None
+
+
+def _classify_time_period_from_windows(local_dt, windows):
+    """Classify local time into night/twilight/daylight based on solar windows."""
+    if local_dt < windows["dawn_start"]:
+        return "night"
+    if windows["dawn_start"] <= local_dt < windows["sunrise"]:
+        return "twilight"
+    if windows["sunrise"] <= local_dt < windows["sunset"]:
+        return "daylight"
+    if windows["sunset"] <= local_dt <= windows["dusk_end"]:
+        return "twilight"
+    return "night"
+
+
+def _classify_time_period_fallback(local_dt):
+    """Legacy hour-based fallback for cases where sunrise/sunset data is unavailable."""
+    hour = local_dt.hour
+    is_daytime = 8 <= hour < 18
+    is_nighttime = hour >= 22 or hour < 6
+    if is_daytime:
+        return "daylight"
+    if is_nighttime:
+        return "night"
+    return "twilight"
+
 def analyze_weather_trends(measurements):
     """
     Analyze measurements to extract trends
@@ -753,7 +1001,7 @@ def analyze_precipitation(measurements):
         "positive_samples": positive_samples
     }
 
-def analyze_lux_anomaly(measurements):
+def analyze_lux_anomaly(measurements, nws_data=None):
     """
     Analyze lux/light levels to detect anomalous conditions.
     Only flags interesting cases like unusually dark during daytime or bright at night.
@@ -789,56 +1037,77 @@ def analyze_lux_anomaly(measurements):
     # Get local time for the most recent reading
     try:
         tz = ZoneInfo(LOCAL_TIMEZONE)
-        latest_time = lux_readings[-1]['timestamp']
+        latest_time = max(
+            (r['timestamp'] for r in lux_readings if isinstance(r.get('timestamp'), datetime)),
+            default=None,
+        )
         if isinstance(latest_time, datetime):
             local_dt = latest_time.astimezone(tz)
         else:
             local_dt = datetime.now(tz)
-        
+
         hour = local_dt.hour
-        
-        # Define thresholds based on time of day
-        # Daytime hours: 8am - 6pm (should be bright)
-        # Night hours: 10pm - 6am (should be dark)
-        # Twilight hours: 6am-8am, 6pm-10pm (variable)
-        
-        is_daytime = 8 <= hour < 18
-        is_nighttime = hour >= 22 or hour < 6
-        is_twilight = not (is_daytime or is_nighttime)
-        
-        # Thresholds (approximate lux levels):
-        # Full daylight: 10,000+ lux
-        # Overcast day: 1,000-10,000 lux  
-        # Very dark/storm: <500 lux during day
-        # Indoor/dark: <100 lux
-        # Night: typically <10 lux
-        
+        windows, fallback_reason = _build_daylight_windows(nws_data, local_dt, tz)
+        if windows:
+            time_period = _classify_time_period_from_windows(local_dt, windows)
+            source = "nws_solar_adjusted" if windows.get("daylight_data_quality") == "adjacent_day_adjusted" else "nws_solar"
+        else:
+            time_period = _classify_time_period_fallback(local_dt)
+            source = "hour_fallback"
+
         anomalous = False
         reason = None
-        
-        if is_daytime:
+
+        if time_period == "daylight":
             if avg_lux < 500:
                 anomalous = True
                 if avg_lux < 100:
-                    reason = f"Unusually dark for midday (avg {avg_lux:.1f} lux at {hour}:00) - typical indoor lighting levels during daytime hours"
+                    reason = f"Unusually dark for daylight hours (avg {avg_lux:.1f} lux at {hour}:00) - typical indoor lighting levels"
                 else:
                     reason = f"Significantly reduced daylight (avg {avg_lux:.1f} lux at {hour}:00) - possible heavy cloud cover or storm conditions"
-        elif is_nighttime:
+        elif time_period == "night":
             if avg_lux > 500:
                 anomalous = True
                 reason = f"Unusually bright for nighttime (avg {avg_lux:.1f} lux at {hour}:00)"
-        # Twilight hours - only flag extreme cases
-        elif is_twilight:
-            if avg_lux < 50 and hour < 20:  # Very dark during early evening
+        else:
+            # Twilight remains permissive; only flag clearly abnormal darkness/brightness.
+            if avg_lux < 10:
                 anomalous = True
-                reason = f"Darker than expected for {hour}:00 (avg {avg_lux:.1f} lux)"
+                reason = f"Darker than expected for twilight (avg {avg_lux:.1f} lux at {hour}:00)"
+            elif avg_lux > 20000:
+                anomalous = True
+                reason = f"Exceptionally bright for twilight (avg {avg_lux:.1f} lux at {hour}:00)"
+
+        if windows:
+            daylight_context = {
+                "sunrise": windows["sunrise"].isoformat(),
+                "sunset": windows["sunset"].isoformat(),
+                "dawn_start": windows["dawn_start"].isoformat(),
+                "dusk_end": windows["dusk_end"].isoformat(),
+                "twilight_buffer_minutes": windows["twilight_buffer_minutes"],
+                "daylight_data_quality": windows.get("daylight_data_quality"),
+                "source_day_offset_days": windows.get("source_day_offset_days"),
+            }
+        else:
+            daylight_context = {
+                "sunrise": None,
+                "sunset": None,
+                "dawn_start": None,
+                "dusk_end": None,
+                "twilight_buffer_minutes": TWILIGHT_BUFFER_MINUTES,
+                "daylight_data_quality": "fallback",
+                "source_day_offset_days": None,
+            }
         
         return {
             "anomalous": anomalous,
             "reason": reason,
             "lux_avg": avg_lux,
             "hour": hour,
-            "time_period": "daytime" if is_daytime else "nighttime" if is_nighttime else "twilight"
+            "time_period": time_period,
+            "classification_source": source,
+            "fallback_reason": fallback_reason,
+            "daylight_context": daylight_context,
         }
         
     except Exception as e:
