@@ -126,20 +126,12 @@ def _collect_reporting_issues(weather_data):
     lux_info = weather_data.get("lux_anomaly") or {}
     source = lux_info.get("classification_source")
     fallback_reason = lux_info.get("fallback_reason")
-    daylight_ctx = lux_info.get("daylight_context") or {}
-    daylight_quality = daylight_ctx.get("daylight_data_quality")
-    offset_days = daylight_ctx.get("source_day_offset_days")
 
     if source == "hour_fallback":
         if fallback_reason:
             issues.append(f"Daylight classifier fallback active: {fallback_reason}")
         else:
             issues.append("Daylight classifier fallback active")
-    elif daylight_quality == "adjacent_day_adjusted":
-        if isinstance(offset_days, int):
-            issues.append(f"Solar timing adjusted from nearby day (offset {offset_days:+d})")
-        else:
-            issues.append("Solar timing adjusted from nearby day")
 
     return issues
 
