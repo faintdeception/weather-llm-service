@@ -9,11 +9,13 @@ detection. Reports are stored in prediction format for downstream compatibility.
 import os
 import logging
 import sys
+from pathlib import Path
 from app.services.llm_service import (
     generate_weather_prediction,
     get_measurements,
     ANALYSIS_WINDOW_HOURS
 )
+from app.services.memory_service import get_memory_settings
 
 try:
     from dotenv import load_dotenv
@@ -37,6 +39,42 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger("scheduled-task")
+
+
+def _log_memory_status():
+    """Log memory thread size and run entry count for observability."""
+    try:
+        settings = get_memory_settings()
+        memory_path = Path(settings["memory_path"])
+
+        if not memory_path.exists():
+            logger.info(f"WeatherBot memory file not found yet at {memory_path}")
+            return
+
+        size_bytes = memory_path.stat().st_size
+        max_file_bytes = settings["max_file_bytes"]
+        compact_at_ratio = settings["compact_at_ratio"]
+        target_ratio = settings["target_ratio"]
+        compact_at_bytes = int(max_file_bytes * compact_at_ratio)
+        target_bytes = int(max_file_bytes * target_ratio)
+
+        run_count = 0
+        with memory_path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if line.startswith("## Run 20"):
+                    run_count += 1
+
+        logger.info(
+            "WeatherBot memory status: path=%s size=%d bytes runs=%d compact_at=%d bytes target=%d bytes max=%d bytes",
+            memory_path,
+            size_bytes,
+            run_count,
+            compact_at_bytes,
+            target_bytes,
+            max_file_bytes,
+        )
+    except Exception as exc:
+        logger.warning(f"Unable to log WeatherBot memory status: {exc}")
 
 def main():
     """Main function to run the scheduled task"""
@@ -77,6 +115,7 @@ def main():
         sys.exit(1)
         
     logger.info(f"Scheduled weather report generation task completed successfully using {hours_to_analyze} hours of data")
+    _log_memory_status()
     
 if __name__ == "__main__":
     main()
