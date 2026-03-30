@@ -52,6 +52,7 @@ LOCAL_TIMEZONE = os.getenv("LOCAL_TIMEZONE", "America/New_York")
 TWILIGHT_BUFFER_MINUTES = int(os.getenv("TWILIGHT_BUFFER_MINUTES", "45"))
 MAX_SOLAR_DAY_OFFSET = int(os.getenv("MAX_SOLAR_DAY_OFFSET", "1"))
 SOLAR_MENTION_WINDOW_MINUTES = int(os.getenv("SOLAR_MENTION_WINDOW_MINUTES", "60"))
+PROMPT_FORECAST_PERIOD_LIMIT = int(os.getenv("PROMPT_FORECAST_PERIOD_LIMIT", "4"))
 
 
 def _get_local_time():
@@ -233,6 +234,21 @@ def _build_solar_event_prompt_context(forecast, current_local_time):
         )
 
     return context
+
+
+def _truncate_forecast_for_prompt(forecast, max_periods=PROMPT_FORECAST_PERIOD_LIMIT):
+    """Return a prompt-safe forecast copy with only the first N periods."""
+    if not isinstance(forecast, dict):
+        return forecast
+
+    periods = forecast.get("periods")
+    if not isinstance(periods, list):
+        return forecast
+
+    trimmed = dict(forecast)
+    period_limit = max(0, int(max_periods))
+    trimmed["periods"] = periods[:period_limit]
+    return trimmed
 
 def call_prediction_api(weather_data):
     """
@@ -631,6 +647,12 @@ def generate_weather_prediction(db=None, date=None, force_cache_overwrite=False,
         else:
             logger.warning("NWS snapshot was not stored")
 
+        prompt_nws_data = dict(nws_data)
+        prompt_nws_data["forecast"] = _truncate_forecast_for_prompt(
+            nws_data.get("forecast"),
+            max_periods=PROMPT_FORECAST_PERIOD_LIMIT,
+        )
+
         # Step 4d: Analyze lux anomalies with daylight context when available
         lux_info = analyze_lux_anomaly(measurements, nws_data=nws_data)
         if lux_info.get('anomalous'):
@@ -650,7 +672,7 @@ def generate_weather_prediction(db=None, date=None, force_cache_overwrite=False,
             "analysis_window_hours": analysis_window,
             "precipitation": precipitation_info,
             "lux_anomaly": lux_info,
-            "nws_data": nws_data
+            "nws_data": prompt_nws_data
         }
         
         # Step 6: Call the LLM API

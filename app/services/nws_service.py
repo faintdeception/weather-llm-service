@@ -119,7 +119,6 @@ def get_nws_forecast(latitude: float = NWS_LATITUDE, longitude: float = NWS_LONG
         
         # Extract forecast URL and astronomical metadata
         forecast_url = props.get("forecast")
-        forecast_hourly_url = props.get("forecastHourly")
         astronomical_data = props.get("astronomicalData") or {}
         
         if not forecast_url:
@@ -141,32 +140,29 @@ def get_nws_forecast(latitude: float = NWS_LATITUDE, longitude: float = NWS_LONG
             logger.warning("No forecast periods found")
             return None
         
-        # Extract relevant forecast information (next 24 hours)
+        # Preserve the full NWS forecast payload periods for snapshot storage.
+        # Prompt-size truncation is applied later in llm_service for WeatherBot only.
         forecast_summary = {
             "office": props.get("forecastOffice"),
             "gridId": props.get("gridId"),
             "gridX": props.get("gridX"),
             "gridY": props.get("gridY"),
+            "generatedAt": forecast_data.get("properties", {}).get("generatedAt"),
+            "updateTime": forecast_data.get("properties", {}).get("updateTime"),
+            "validTimes": forecast_data.get("properties", {}).get("validTimes"),
             "sunrise": astronomical_data.get("sunrise"),
             "sunset": astronomical_data.get("sunset"),
-            "periods": []
+            "periods": periods,
         }
-        
-        # Get first few periods (typically covers today and tonight)
-        for period in periods[:4]:  # Get next ~2 days of periods
-            period_info = {
-                "name": period.get("name"),  # "This Afternoon", "Tonight", etc.
-                "startTime": period.get("startTime"),
-                "endTime": period.get("endTime"),
-                "temperature": period.get("temperature"),
-                "temperatureUnit": period.get("temperatureUnit"),
-                "windSpeed": period.get("windSpeed"),
-                "windDirection": period.get("windDirection"),
-                "shortForecast": period.get("shortForecast"),
-                "detailedForecast": period.get("detailedForecast"),
-            }
-            forecast_summary["periods"].append(period_info)
-            logger.info(f"Forecast period: {period_info['name']} - {period_info['shortForecast']}")
+
+        for period in periods[:4]:
+            logger.info(
+                "Forecast period preview: %s - %s",
+                period.get("name"),
+                period.get("shortForecast"),
+            )
+
+        logger.info("Fetched %s NWS forecast periods", len(periods))
         
         return forecast_summary
         
