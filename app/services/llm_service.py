@@ -607,15 +607,11 @@ def generate_weather_prediction(db=None, date=None, force_cache_overwrite=False,
         # Step 4c: Fetch NWS alerts and forecast
         logger.info("Fetching NWS alerts and forecast data...")
         nws_data = get_nws_data()
-        try:
-            nws_data = _ensure_forecast_with_recent_fallback(
-                nws_data=nws_data,
-                db=db,
-                max_previous=3,
-            )
-        except RuntimeError as forecast_error:
-            logger.error(f"{forecast_error}; aborting weather report generation")
-            return None
+        nws_data = _ensure_forecast_with_recent_fallback(
+            nws_data=nws_data,
+            db=db,
+            max_previous=10,
+        )
 
         if nws_data.get('alerts'):
             logger.info(f"Found {len(nws_data['alerts'])} active NWS alerts")
@@ -908,24 +904,27 @@ def _parse_iso_datetime(raw_value):
     return None
 
 
-def _ensure_forecast_with_recent_fallback(nws_data, db, max_previous=3):
+def _ensure_forecast_with_recent_fallback(nws_data, db, max_previous=10):
     """
     Ensure NWS payload has a forecast, falling back to recent cached snapshots.
 
     If a live NWS response contains ``forecast=None``, this reuses the most recent
     non-null forecast from up to ``max_previous`` cached snapshots. If no fallback
-    exists, a RuntimeError is raised so the caller can hard-fail the report run.
+    exists (or DB lookup is unavailable), keep the null forecast and continue.
     """
     if not isinstance(nws_data, dict):
-        raise RuntimeError("NWS payload is invalid; expected a dictionary")
+        logger.warning("NWS payload is invalid; expected a dictionary")
+        return nws_data
 
     if nws_data.get("forecast") is not None:
         return nws_data
 
     if db is None:
-        raise RuntimeError(
-            f"NWS forecast is null and no database is available to check previous {max_previous} forecasts"
+        logger.warning(
+            "NWS forecast is null and no database is available to check previous %s forecasts",
+            max_previous,
         )
+        return nws_data
 
     snapshots = list(
         db["nws_snapshots"].find(
@@ -946,9 +945,11 @@ def _ensure_forecast_with_recent_fallback(nws_data, db, max_previous=3):
             )
             return nws_data
 
-    raise RuntimeError(
-        f"NWS forecast is null and all previous {max_previous} cached forecasts are null"
+    logger.warning(
+        "NWS forecast is null and all previous %s cached forecasts are null",
+        max_previous,
     )
+    return nws_data
 
 
 def _build_daylight_windows(nws_data, reference_dt_local, tz):

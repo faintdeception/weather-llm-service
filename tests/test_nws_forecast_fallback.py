@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from app.services.llm_service import _ensure_forecast_with_recent_fallback
 
@@ -41,7 +41,7 @@ class FakeDB:
 
 
 class NwsForecastFallbackTests(unittest.TestCase):
-    def test_uses_most_recent_non_null_from_previous_three(self):
+    def test_uses_most_recent_non_null_from_previous_ten(self):
         snapshots = [
             {
                 "created_at": datetime(2026, 3, 30, 10, 0, tzinfo=timezone.utc),
@@ -59,12 +59,12 @@ class NwsForecastFallbackTests(unittest.TestCase):
         db = FakeDB(snapshots)
 
         nws_data = {"alerts": [], "forecast": None}
-        resolved = _ensure_forecast_with_recent_fallback(nws_data, db=db, max_previous=3)
+        resolved = _ensure_forecast_with_recent_fallback(nws_data, db=db, max_previous=10)
 
         self.assertIsNotNone(resolved["forecast"])
         self.assertEqual(resolved["forecast"]["periods"][0]["name"], "Morning")
 
-    def test_hard_fails_when_previous_three_forecasts_are_all_null(self):
+    def test_keeps_null_when_previous_ten_forecasts_are_all_null(self):
         snapshots = [
             {
                 "created_at": datetime(2026, 3, 30, 10, 0, tzinfo=timezone.utc),
@@ -81,32 +81,30 @@ class NwsForecastFallbackTests(unittest.TestCase):
         ]
         db = FakeDB(snapshots)
 
-        with self.assertRaises(RuntimeError):
-            _ensure_forecast_with_recent_fallback({"forecast": None}, db=db, max_previous=3)
+        resolved = _ensure_forecast_with_recent_fallback({"forecast": None}, db=db, max_previous=10)
+        self.assertIsNone(resolved["forecast"])
 
-    def test_ignores_older_non_null_forecast_outside_previous_three(self):
-        snapshots = [
+    def test_ignores_older_non_null_forecast_outside_previous_ten(self):
+        snapshots = []
+        base_time = datetime(2026, 3, 30, 10, 0, tzinfo=timezone.utc)
+        for i in range(11):
+            snapshots.append(
+                {
+                    "created_at": base_time - timedelta(minutes=i),
+                    "nws_data": {"forecast": None},
+                }
+            )
+
+        snapshots.append(
             {
-                "created_at": datetime(2026, 3, 30, 10, 0, tzinfo=timezone.utc),
-                "nws_data": {"forecast": None},
-            },
-            {
-                "created_at": datetime(2026, 3, 30, 9, 45, tzinfo=timezone.utc),
-                "nws_data": {"forecast": None},
-            },
-            {
-                "created_at": datetime(2026, 3, 30, 9, 30, tzinfo=timezone.utc),
-                "nws_data": {"forecast": None},
-            },
-            {
-                "created_at": datetime(2026, 3, 30, 9, 15, tzinfo=timezone.utc),
-                "nws_data": {"forecast": {"periods": [{"name": "Too Old"}] }},
-            },
-        ]
+                "created_at": datetime(2026, 3, 30, 8, 0, tzinfo=timezone.utc),
+                "nws_data": {"forecast": {"periods": [{"name": "Too Old"}]}},
+            }
+        )
         db = FakeDB(snapshots)
 
-        with self.assertRaises(RuntimeError):
-            _ensure_forecast_with_recent_fallback({"forecast": None}, db=db, max_previous=3)
+        resolved = _ensure_forecast_with_recent_fallback({"forecast": None}, db=db, max_previous=10)
+        self.assertIsNone(resolved["forecast"])
 
 
 if __name__ == "__main__":
